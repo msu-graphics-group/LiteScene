@@ -1,6 +1,7 @@
 #ifndef HYDRAXML_H
 #define HYDRAXML_H
 
+#include "common.h"
 #include "pugixml.hpp"
 #include "LiteMath.h"
 using namespace LiteMath;
@@ -39,51 +40,10 @@ namespace hydra_xml
   /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   
-  struct Instance
-  {
-    uint32_t           instId = uint32_t(-1);
-    uint32_t           geomId = uint32_t(-1); ///< geom id
-    uint32_t           rmapId = uint32_t(-1); ///< remap list id, todo: add function to get real remap list by id
-    uint32_t           lightInstId = uint32_t(-1);
-    LiteMath::float4x4 matrix;                ///< transform matrix
-    LiteMath::float4x4 matrix_motion;         ///< transform matrix at the end of motion
-    bool               hasMotion = false;    ///< is this instance moving? (i.e has meaningful motion matrix)
-    pugi::xml_node     node;
-  };
-
-  struct LightInstance
-  {
-    uint32_t           instId  = uint32_t(-1);
-    uint32_t           lightId = uint32_t(-1);
-    pugi::xml_node     instNode;
-    pugi::xml_node     lightNode;
-    LiteMath::float4x4 matrix;
-    pugi::xml_node     node;
-  };
-
-  struct Camera
-  {
-    float pos[3];
-    float lookAt[3];
-    float up[3];
-    float fov;
-    float nearPlane;
-    float farPlane;
-    float exposureMult;
-    pugi::xml_node node;
-    LiteMath::float4x4 matrix;  // view matrix
-    bool has_matrix;
-  };
-
-  struct Settings
-  {
-    uint32_t width;
-    uint32_t height;
-    uint32_t spp;
-    uint32_t depth;
-    uint32_t depthDiffuse;
-    pugi::xml_node node;
-  };
+  using Instance = ::Instance;
+  using LightInstance = ::LightInstance;
+  using Camera = ::Camera;
+  using Settings = ::Settings;
 
   /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
