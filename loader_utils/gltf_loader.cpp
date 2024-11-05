@@ -124,9 +124,9 @@ namespace gltf_loader
   }
 
 
-  MaterialDataGLTF materialDataFromGLTF(const tinygltf::Material &gltfMat, const std::vector<tinygltf::Texture> &gltfTextures)
+  MaterialDataInternal materialDataFromGLTF(const tinygltf::Material &gltfMat, const std::vector<tinygltf::Texture> &gltfTextures)
   {
-    MaterialDataGLTF mat = {};
+    MaterialDataInternal mat = {};
     auto& baseColor = gltfMat.pbrMetallicRoughness.baseColorFactor;
     mat.baseColor   = LiteMath::float4(baseColor[0], baseColor[1], baseColor[2], baseColor[3]);
     mat.alphaCutoff = gltfMat.alphaCutoff;
@@ -305,6 +305,7 @@ namespace gltf_loader
     return simpleMesh;
   }
 
+/*
   LiteImage::Sampler samplerFromGLTF(const tinygltf::Sampler &gltfSampler)
   {
     LiteImage::Sampler sampler {};
@@ -418,4 +419,5 @@ namespace gltf_loader
 
     return pResult;
   }
+  */
 }

@@ -56,6 +56,7 @@ namespace cmesh4
 
     void ApplyMatrix(const LiteMath::float4x4& m);
 
+    LiteMath::BBox3f bbox;
     std::vector<LiteMath::float4> vPos4f;      // #TODO: put aligned allocator here
     std::vector<LiteMath::float4> vNorm4f;     // #TODO: put aligned allocator here
     std::vector<LiteMath::float4> vTang4f;     // #TODO: put aligned allocator here
