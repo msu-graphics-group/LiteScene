@@ -5,6 +5,7 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <algorithm>
 
 #define TINYGLTF_NO_INCLUDE_STB_IMAGE
 #define TINYGLTF_NO_INCLUDE_STB_IMAGE_WRITE
@@ -71,6 +72,7 @@ namespace LiteScene
 
     }
 
+
     static bool load_gltf_meshes(const gltf::Model model, std::map<uint32_t, Geometry *> &geometries, bool only_geometry)
     {
         std::vector<std::unique_ptr<MeshGeometry>> meshes;
@@ -80,10 +82,10 @@ namespace LiteScene
         for(const auto &mesh : model.meshes) {
             std::unique_ptr<MeshGeometry> mg{new MeshGeometry()};
 
-            std::cout << "Adding mesh" << id << std::endl;
+            //std::cout << "Adding mesh" << id << std::endl;
 
             mg->id = id;
-            mg->name = "gltf-mesh#" + std::to_string(id);
+            mg->name = mesh.name.size() ? mesh.name : "gltf-mesh#" + std::to_string(id);
             mg->relative_file_path = "data/gltf_mesh_" + std::to_string(id) + ".vsgf";
 
             std::vector<uint32_t> prim_materials;
@@ -99,9 +101,11 @@ namespace LiteScene
 
                 const gltf::Accessor& posAccessor = model.accessors[prim.attributes.at("POSITION")];
                 const gltf::Accessor& normAccessor = model.accessors[prim.attributes.at("NORMAL")];
+                const gltf::Accessor& tangAccessor = model.accessors[prim.attributes.at("TANGENT")];
                 const gltf::Accessor& indAcessor  = model.accessors[prim.indices];
                 append_float3_as_float4(model, posAccessor, simpleMesh.vPos4f);
                 append_float3_as_float4(model, normAccessor, simpleMesh.vNorm4f);
+                append_float3_as_float4(model, tangAccessor, simpleMesh.vTang4f);
                 append_indices(model, indAcessor, simpleMesh.indices);
 
                 simpleMesh.vTexCoord2f.resize(simpleMesh.vPos4f.size());
@@ -114,6 +118,27 @@ namespace LiteScene
         }
 
         return true;
+    }
+
+
+    static inline float4x4 quat2mat(double qw, double qx, double qy, double qz)
+    {   
+        float4x4 rotation;
+
+        double qx2 = qx * qx;
+        double qy2 = qy * qy;
+        double qz2 = qz * qz;
+
+        rotation(0, 0) = 1.0f - 2.0f * float(qy2 + qz2);
+        rotation(0, 1) = 2.0f * float(qx * qy - qz * qw);
+        rotation(0, 2) = 2.0f * float(qx * qz + qy * qw);
+        rotation(1, 0) = 2.0f * float(qx * qy + qz * qw);
+        rotation(1, 1) = 1.0f - 2.0f * float(qx2 + qz2);
+        rotation(1, 2) = 2.0f * float(qy * qz - qx * qw);
+        rotation(2, 0) = 2.0f * float(qx * qz - qy * qw);
+        rotation(2, 1) = 2.0f * float(qy * qz + qx * qw);
+        rotation(2, 2) = 1.0f - 2.0f * float(qx2 + qy2);
+        return rotation;
     }
 
     static void load_gltf_node_matrix(const gltf::Node &node, LiteMath::float4x4 &mat)
@@ -134,19 +159,7 @@ namespace LiteScene
             double qy = node.rotation[2];
             double qz = node.rotation[3];
 
-            double qx2 = qx * qx;
-            double qy2 = qy * qy;
-            double qz2 = qz * qz;
-
-            rotation(0, 0) = 1.0f - 2.0f * float(qy2 + qz2);
-            rotation(0, 1) = 2.0f * float(qx * qy - qz * qw);
-            rotation(0, 2) = 2.0f * float(qx * qz + qy * qw);
-            rotation(1, 0) = 2.0f * float(qx * qy + qz * qw);
-            rotation(1, 1) = 1.0f - 2.0f * float(qx2 + qz2);
-            rotation(1, 2) = 2.0f * float(qy * qz - qx * qw);
-            rotation(2, 0) = 2.0f * float(qx * qz - qy * qw);
-            rotation(2, 1) = 2.0f * float(qy * qz + qx * qw);
-            rotation(2, 2) = 1.0f - 2.0f * float(qx2 + qy2);
+            rotation = quat2mat(qw, qx, qy, qz);
         }
 
         if(!node.scale.empty()) {
@@ -231,7 +244,21 @@ namespace LiteScene
         }
         return true;
     }
+/*
+    bool load_gltf_mat(const gltf::Model &model, std::map<uint32_t, Material *> &materials)
+    {
+        uint32_t id = 0;
+        for(const auto &gltfMat : model.materials) {
+            std::string matName = gltfMat.name.size() ? gltfMat.name : ("gltf-mat#" + std::to_string(id));
+            GltfMaterial mat{id, matName};
+            const auto &mr = gltfMat.pbrMetallicRoughness;
+            if(mr.baseColorTexture.index != -1) {
 
+            }
+
+        }
+    }
+*/
     bool load_gltf_scene(const std::string &filename, HydraScene &scene, bool only_geometry)
     {
         gltf::Model model;
@@ -257,5 +284,99 @@ namespace LiteScene
 
         return true;
     }
+
+    //returns first id of accessor
+    int buffer_write_mesh_pnt(gltf::Model &model, int buf_id, gltf::Buffer &buffer, //buffer is in model.buffers
+                               const std::vector<LiteMath::float4> &pos4f,
+                               const std::vector<LiteMath::float4> &norm4f,
+                               const std::vector<LiteMath::float4> &tang4f)
+    {
+        size_t offset = buffer.data.size();
+
+        gltf::BufferView view;
+        gltf::Accessor posAcc;
+        gltf::Accessor normAcc;
+        gltf::Accessor tangAcc;
+
+        view.buffer = buf_id;
+        view.byteOffset = offset;
+        view.target = TINYGLTF_TARGET_ARRAY_BUFFER;
+        view.byteLength = (pos4f.size() + norm4f.size() + tang4f.size()) * 3 * sizeof(float);
+
+
+        buffer.resize(offset + view.byteLength);
+
+        posAcc.byteOffset = 0;
+        posAcc.componentType = TINYGLTF_COMPONENT_TYPE_FLOAT;
+        posAcc.count = pos4f.size();
+        posAcc.type = TINYGLTF_TYPE_VEC3;
+        posAcc.maxValues = {1.0, 1.0, 0.0};
+        posAcc.minValues = {0.0, 0.0, 0.0};
+        for(const auto &vec : pos4f) {
+            std::copy(vec.M, vec.M + 3, reinterpret_cast<float *>(buffer.data.data() + offset));
+            offset += 3 * sizeof(float);
+        }
+
+        normAcc.byteOffset = posAcc.byteOffset + pos4f.size() * 3 * sizeof(float);
+        normAcc.componentType = TINYGLTF_COMPONENT_TYPE_FLOAT;
+        normAcc.count = norm4f.size();
+        normAcc.type = TINYGLTF_TYPE_VEC3;
+        normAcc.maxValues = {1.0, 1.0, 0.0};
+        normAcc.minValues = {0.0, 0.0, 0.0};
+        for(const auto &vec : norm4f) {
+            std::copy(vec.M, vec.M + 3, reinterpret_cast<float *>(buffer.data.data() + offset));
+            offset += 3 * sizeof(float);
+        }
+
+        tangAcc.byteOffset = normAcc.byteOffset + norm4f.size() * 3 * sizeof(float);
+        tangAcc.componentType = TINYGLTF_COMPONENT_TYPE_FLOAT;
+        tangAcc.count = tang4f.size();
+        tangAcc.type = TINYGLTF_TYPE_VEC3;
+        tangAcc.maxValues = {1.0, 1.0, 0.0};
+        tangAcc.minValues = {0.0, 0.0, 0.0};
+        for(const auto &vec : tang4f) {
+            std::copy(vec.M, vec.M + 3, reinterpret_cast<float *>(buffer.data.data() + offset));
+            offset += 3 * sizeof(float);
+        }
+
+        int view_id = model.bufferViews.size();
+        model.bufferViews.push_back(std::move(view));
+        posAcc.bufferView = view_id;
+        normAcc.bufferView = view_id;
+        tangAcc.bufferView = view_id;
+
+        model.accessors.push_back(std::move(posAcc));
+        model.accessors.push_back(std::move(normAcc));
+        model.accessors.push_back(std::move(tangAcc));
+    }
+
+    bool save_gltf_meshes(gltf::Model &model, const std::map<uint32_t, Geometry*> &geometries, bool only_geometry)
+    {
+        model.meshes.reserve(geometries.size());
+        if(std::max_element(geometries.begin(), geometries.end(), [](a, b) { return a.first < b.first; }) != geometries.size() - 1) {
+            std::cerr << "[scene_convert ERROR] : Illegal mesh ids" << std::endl;
+            return false;
+        }
+
+        for(const auto &[id, geom] : geometries) {
+            if(geom->type_id != Geometry::MESH_TYPE_ID) return false;
+            const MeshGeometry &mesh_geom = *static_cast<const MeshGeometry *>(geom);
+             
+            gltf::Mesh mesh;
+            mesh.name = mesh_geom.name;
+            
+
+            buffer_write_mesh_pnt()
+        }
+    }
+
+    bool save_gltf_scene(const std::string &filename, const HydraScene &scene, bool only_geometry)
+    {
+        gltf::Model model;
+        if(!save_gltf_meshes(model, scene.geometries, only_geometry)) return false;
+
+        return true;
+    }
+
 
 }
