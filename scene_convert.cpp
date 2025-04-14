@@ -304,7 +304,7 @@ namespace LiteScene
         view.byteLength = (pos4f.size() + norm4f.size() + tang4f.size()) * 3 * sizeof(float);
 
 
-        buffer.resize(offset + view.byteLength);
+        buffer.data.resize(offset + view.byteLength);
 
         posAcc.byteOffset = 0;
         posAcc.componentType = TINYGLTF_COMPONENT_TYPE_FLOAT;
@@ -345,35 +345,78 @@ namespace LiteScene
         normAcc.bufferView = view_id;
         tangAcc.bufferView = view_id;
 
+
+        const int id = int(model.accessors.size());
         model.accessors.push_back(std::move(posAcc));
         model.accessors.push_back(std::move(normAcc));
         model.accessors.push_back(std::move(tangAcc));
+        return id;
     }
 
-    bool save_gltf_meshes(gltf::Model &model, const std::map<uint32_t, Geometry*> &geometries, bool only_geometry)
+    int buffer_write_indices(gltf::Model &model, int buf_id, gltf::Buffer &buffer, const std::vector<unsigned> &indices)
+    {
+        size_t offset = buffer.data.size();
+
+        gltf::BufferView view;
+        gltf::Accessor acc;
+
+        view.buffer = buf_id;
+        view.byteOffset = offset;
+        view.target = TINYGLTF_TARGET_ELEMENT_ARRAY_BUFFER;
+        view.byteLength = indices.size() * sizeof(uint32_t);
+
+        buffer.data.resize(offset + view.byteLength);
+
+        acc.byteOffset = 0;
+        acc.componentType = TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT;
+        acc.count = indices.size();
+        acc.type = TINYGLTF_TYPE_SCALAR;
+
+        auto [imin, imax] = std::minmax_element(indices.begin(), indices.end());
+        acc.maxValues = {double(*imax)};
+        acc.minValues = {double(*imin)};
+
+        std::copy(indices.begin(), indices.end(), reinterpret_cast<uint32_t *>(buffer.data.data() + offset));
+
+
+        const int view_id = model.bufferViews.size();
+        model.bufferViews.push_back(std::move(view));
+        acc.bufferView = view_id;
+        const int acc_id = int(model.accessors.size());
+        model.accessors.push_back(std::move(acc));
+        return acc_id;
+    }
+
+    bool save_gltf_meshes(gltf::Model &model, const std::map<uint32_t, Geometry*> &geometries, const SceneMetadata &meta, bool only_geometry)
     {
         model.meshes.reserve(geometries.size());
-        if(std::max_element(geometries.begin(), geometries.end(), [](a, b) { return a.first < b.first; }) != geometries.size() - 1) {
+        if(geometries.rbegin()->first != geometries.size() - 1) {
             std::cerr << "[scene_convert ERROR] : Illegal mesh ids" << std::endl;
             return false;
         }
 
         for(const auto &[id, geom] : geometries) {
             if(geom->type_id != Geometry::MESH_TYPE_ID) return false;
-            const MeshGeometry &mesh_geom = *static_cast<const MeshGeometry *>(geom);
-             
+            MeshGeometry &mesh_geom = *static_cast<MeshGeometry *>(geom);
+            const int buf_id = int(model.buffers.size());
+            gltf::Buffer &buffer = model.buffers.emplace_back();
             gltf::Mesh mesh;
             mesh.name = mesh_geom.name;
-            
 
-            buffer_write_mesh_pnt()
+            mesh_geom.load_data(meta);
+            const int accessor_id0 = buffer_write_mesh_pnt(model, buf_id, buffer, mesh_geom.mesh.vPos4f,
+                                                                                  mesh_geom.mesh.vNorm4f,
+                                                                                  mesh_geom.mesh.vTang4f);
+
+            const int accessor_id1 = buffer_write_indices(model, buf_id, buffer, mesh_geom.mesh.indices);
         }
+        return true;
     }
 
     bool save_gltf_scene(const std::string &filename, const HydraScene &scene, bool only_geometry)
     {
         gltf::Model model;
-        if(!save_gltf_meshes(model, scene.geometries, only_geometry)) return false;
+        if(!save_gltf_meshes(model, scene.geometries, scene.metadata, only_geometry)) return false;
 
         return true;
     }
