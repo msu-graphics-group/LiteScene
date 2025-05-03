@@ -6,6 +6,8 @@
 #include <memory>
 #include <optional>
 #include <algorithm>
+#include <utility>
+#include <unordered_map>
 
 #define TINYGLTF_NO_INCLUDE_STB_IMAGE
 #define TINYGLTF_NO_INCLUDE_STB_IMAGE_WRITE
@@ -285,11 +287,29 @@ namespace LiteScene
         return true;
     }
 
-    //returns first id of accessor
-    int buffer_write_mesh_pnt(gltf::Model &model, int buf_id, gltf::Buffer &buffer, //buffer is in model.buffers
-                               const std::vector<LiteMath::float4> &pos4f,
-                               const std::vector<LiteMath::float4> &norm4f,
-                               const std::vector<LiteMath::float4> &tang4f)
+
+
+    inline std::unordered_map<uint32_t, std::vector<uint32_t>> group_by_material(const std::vector<unsigned> &indices, const std::vector<unsigned> &materials)
+    {
+        std::unordered_map<uint32_t, std::vector<uint32_t>> groups;
+
+        for(uint32_t i = 0; i < materials.size(); ++i) {
+            auto &list = groups[materials[i]];
+            list.push_back(indices[3 * i]);
+            list.push_back(indices[3 * i + 1]);
+            list.push_back(indices[3 * i + 2]);
+        }
+        return groups;
+    }
+
+
+    /**
+     * Returns ids of accessors to vectors
+     */
+    inline std::tuple<int, int, int> write_vertices_to_buffer(gltf::Model &model, gltf::Buffer &buffer, int buf_id, //buffer is in model.buffers
+                                                              const std::vector<LiteMath::float4> &pos4f,
+                                                              const std::vector<LiteMath::float4> &norm4f,
+                                                              const std::vector<LiteMath::float4> &tang4f)
     {
         size_t offset = buffer.data.size();
 
@@ -310,7 +330,7 @@ namespace LiteScene
         posAcc.componentType = TINYGLTF_COMPONENT_TYPE_FLOAT;
         posAcc.count = pos4f.size();
         posAcc.type = TINYGLTF_TYPE_VEC3;
-        posAcc.maxValues = {1.0, 1.0, 0.0};
+        posAcc.maxValues = {1.0, 1.0, 1.0};
         posAcc.minValues = {0.0, 0.0, 0.0};
         for(const auto &vec : pos4f) {
             std::copy(vec.M, vec.M + 3, reinterpret_cast<float *>(buffer.data.data() + offset));
@@ -321,7 +341,7 @@ namespace LiteScene
         normAcc.componentType = TINYGLTF_COMPONENT_TYPE_FLOAT;
         normAcc.count = norm4f.size();
         normAcc.type = TINYGLTF_TYPE_VEC3;
-        normAcc.maxValues = {1.0, 1.0, 0.0};
+        normAcc.maxValues = {1.0, 1.0, 1.0};
         normAcc.minValues = {0.0, 0.0, 0.0};
         for(const auto &vec : norm4f) {
             std::copy(vec.M, vec.M + 3, reinterpret_cast<float *>(buffer.data.data() + offset));
@@ -332,7 +352,7 @@ namespace LiteScene
         tangAcc.componentType = TINYGLTF_COMPONENT_TYPE_FLOAT;
         tangAcc.count = tang4f.size();
         tangAcc.type = TINYGLTF_TYPE_VEC3;
-        tangAcc.maxValues = {1.0, 1.0, 0.0};
+        tangAcc.maxValues = {1.0, 1.0, 1.0};
         tangAcc.minValues = {0.0, 0.0, 0.0};
         for(const auto &vec : tang4f) {
             std::copy(vec.M, vec.M + 3, reinterpret_cast<float *>(buffer.data.data() + offset));
@@ -350,10 +370,13 @@ namespace LiteScene
         model.accessors.push_back(std::move(posAcc));
         model.accessors.push_back(std::move(normAcc));
         model.accessors.push_back(std::move(tangAcc));
-        return id;
+        return {id, id + 1, id + 2};
     }
 
-    int buffer_write_indices(gltf::Model &model, int buf_id, gltf::Buffer &buffer, const std::vector<unsigned> &indices)
+    /**
+     * Returns if of accessor to indices 
+     */
+    int write_indices_to_buffer(gltf::Model &model, gltf::Buffer &buffer, int buf_id, const std::vector<unsigned> &indices)
     {
         size_t offset = buffer.data.size();
 
@@ -387,6 +410,41 @@ namespace LiteScene
         return acc_id;
     }
 
+
+
+
+    bool save_gltf_mesh(gltf::Model &model, const MeshGeometry &mesh_geom, bool only_geometry)
+    {
+        const int buf_id = int(model.buffers.size());
+        gltf::Buffer &buffer = model.buffers.emplace_back();
+        gltf::Mesh mesh;
+        mesh.name = mesh_geom.name;
+
+        const cmesh4::SimpleMesh &simpleMesh = mesh_geom.mesh; 
+
+        const auto [posAcc, normAcc, tangAcc] = write_vertices_to_buffer(model, buffer, buf_id, 
+                                                                         simpleMesh.vPos4f,
+                                                                         simpleMesh.vNorm4f,
+                                                                         simpleMesh.vTang4f);
+
+        auto grouped = group_by_material(simpleMesh.indices, simpleMesh.matIndices);
+        for(const auto &[mat_id, indices] : grouped) {
+            gltf::Primitive &prim = mesh.primitives.emplace_back();
+
+            prim.material = mat_id;
+            prim.mode = TINYGLTF_MODE_TRIANGLES;
+
+            prim.attributes["POSITION"] = posAcc;
+            prim.attributes["NORMAL"] = normAcc;
+            prim.attributes["TANGENT"] = tangAcc;
+
+            prim.indices = write_indices_to_buffer(model, buffer, buf_id, indices);
+        }
+
+        model.meshes.push_back(std::move(mesh));
+        return true;
+    }
+
     bool save_gltf_meshes(gltf::Model &model, const std::map<uint32_t, Geometry*> &geometries, const SceneMetadata &meta, bool only_geometry)
     {
         model.meshes.reserve(geometries.size());
@@ -397,18 +455,10 @@ namespace LiteScene
 
         for(const auto &[id, geom] : geometries) {
             if(geom->type_id != Geometry::MESH_TYPE_ID) return false;
-            MeshGeometry &mesh_geom = *static_cast<MeshGeometry *>(geom);
-            const int buf_id = int(model.buffers.size());
-            gltf::Buffer &buffer = model.buffers.emplace_back();
-            gltf::Mesh mesh;
-            mesh.name = mesh_geom.name;
+            MeshGeometry *mesh_geom = static_cast<MeshGeometry *>(geom);
+            mesh_geom->load_data(meta);
 
-            mesh_geom.load_data(meta);
-            const int accessor_id0 = buffer_write_mesh_pnt(model, buf_id, buffer, mesh_geom.mesh.vPos4f,
-                                                                                  mesh_geom.mesh.vNorm4f,
-                                                                                  mesh_geom.mesh.vTang4f);
-
-            const int accessor_id1 = buffer_write_indices(model, buf_id, buffer, mesh_geom.mesh.indices);
+            if(!save_gltf_mesh(model, *mesh_geom, only_geometry)) return false;
         }
         return true;
     }
