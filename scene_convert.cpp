@@ -38,35 +38,42 @@ namespace LiteScene
     }
 
     template<typename T, typename P>
-    void _append_int(const gltf::Model &model, const gltf::Accessor& accessor, std::vector<P> &target)
+    void _append_int(const gltf::Model &model, const gltf::Accessor& accessor, std::vector<P> &target, unsigned offset)
     {
         const gltf::BufferView& bufferView = model.bufferViews[accessor.bufferView];
         const gltf::Buffer& buffer = model.buffers[bufferView.buffer];
 
         const T* p = reinterpret_cast<const T*>(&buffer.data[bufferView.byteOffset + accessor.byteOffset]);
-        target.insert(target.end(), p, p + accessor.count);
+        if(offset != 0) {
+            const size_t old_size = target.size();
+            target.resize(old_size + accessor.count);
+            std::transform(p, p + accessor.count, target.begin() + old_size, [offset](T val) { return val + offset; });
+        }
+        else {
+            target.insert(target.end(), p, p + accessor.count);
+        }
     }
 
-    static void append_indices(const gltf::Model &model, const gltf::Accessor& accessor, std::vector<unsigned> &target)
+    static void append_indices(const gltf::Model &model, const gltf::Accessor& accessor, std::vector<unsigned> &target, unsigned offset = 0u)
     {
         switch(accessor.componentType) {
         case TINYGLTF_COMPONENT_TYPE_INT:
-            _append_int<int32_t, unsigned>(model, accessor, target);
+            _append_int<int32_t, unsigned>(model, accessor, target, offset);
             return;
         case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
-            _append_int<uint32_t, unsigned>(model, accessor, target);
+            _append_int<uint32_t, unsigned>(model, accessor, target, offset);
             return;
         case TINYGLTF_COMPONENT_TYPE_SHORT:
-            _append_int<int16_t, unsigned>(model, accessor, target);
+            _append_int<int16_t, unsigned>(model, accessor, target, offset);
             return;
         case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
-            _append_int<uint16_t, unsigned>(model, accessor, target);
+            _append_int<uint16_t, unsigned>(model, accessor, target, offset);
             return;
         case TINYGLTF_COMPONENT_TYPE_BYTE:
-            _append_int<int8_t, unsigned>(model, accessor, target);
+            _append_int<int8_t, unsigned>(model, accessor, target, offset);
             return;
         case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
-            _append_int<uint8_t, unsigned>(model, accessor, target);
+            _append_int<uint8_t, unsigned>(model, accessor, target, offset);
             return;
         default:
             return;
@@ -74,6 +81,62 @@ namespace LiteScene
 
     }
 
+    //returns offset to add to primitive indices
+    static uint32_t load_vertices_by_accessor(const gltf::Model &model, int acc_id, std::vector<LiteMath::float4> &target, std::unordered_map<uint32_t, uint32_t> &offsetMap)
+    {
+        const auto [it, not_exist] = offsetMap.try_emplace(acc_id, target.size());
+        uint32_t offset = it->second;
+        if(not_exist) {
+            const gltf::Accessor &accessor = model.accessors[acc_id];
+            append_float3_as_float4(model, accessor, target);
+        }
+        return offset;
+    }   
+
+    static bool load_gltf_mesh(const gltf::Model &model, const gltf::Mesh &mesh, cmesh4::SimpleMesh &simpleMesh, std::vector<uint32_t> &materials)
+    {
+        std::unordered_map<uint32_t, uint32_t> posOffsetMap;
+        std::unordered_map<uint32_t, uint32_t> normOffsetMap;
+        std::unordered_map<uint32_t, uint32_t> tangOffsetMap;
+
+        for(const auto &prim : mesh.primitives) {
+            if(prim.mode != TINYGLTF_MODE_TRIANGLES) {
+                std::cerr << "[scene_convert ERROR] Only triangle primitives are supported" << std::endl;
+                return false;
+            }  
+            materials.push_back(prim.material);
+
+            const int posAccId =  prim.attributes.at("POSITION");
+            const int normAccId = prim.attributes.at("NORMAL");
+            const auto tangAccIdIt = prim.attributes.find("TANGENT");
+            const int tangAccId = tangAccIdIt == prim.attributes.end() ? -1 : tangAccIdIt->second;
+
+            const uint32_t posOffset  = load_vertices_by_accessor(model, posAccId,  simpleMesh.vPos4f,  posOffsetMap);
+            const uint32_t normOffset = load_vertices_by_accessor(model, normAccId, simpleMesh.vNorm4f, normOffsetMap);
+
+            const uint32_t tangOffset = tangAccId != -1 ? load_vertices_by_accessor(model, tangAccId, simpleMesh.vTang4f, tangOffsetMap) : 0xffffffff;
+
+            if(posOffset != normOffset || (tangOffset != 0xffffffff && posOffset != tangOffset)) {
+                std::cerr << "[scene_convert ERROR] Inconsistent mesh primitive vectors layout" << std::endl;
+                return false;
+            }
+
+            if(prim.indices != -1) {
+                const gltf::Accessor& indAcessor = model.accessors[prim.indices];
+                append_indices(model, indAcessor, simpleMesh.indices, posOffset);
+            }
+            else {
+                std::cerr << "[scene_convert ERROR] Non-indexed geometry is not supported yet" << std::endl;
+            }
+
+            if(tangAccId == -1) {
+                simpleMesh.vTang4f.resize(simpleMesh.vPos4f.size());
+            }
+            simpleMesh.vTexCoord2f.resize(simpleMesh.vPos4f.size());
+        }
+
+        return true;
+    }
 
     static bool load_gltf_meshes(const gltf::Model model, std::map<uint32_t, Geometry *> &geometries, bool only_geometry)
     {
@@ -89,31 +152,15 @@ namespace LiteScene
             mg->id = id;
             mg->name = mesh.name.size() ? mesh.name : "gltf-mesh#" + std::to_string(id);
             mg->relative_file_path = "data/gltf_mesh_" + std::to_string(id) + ".vsgf";
-
-            std::vector<uint32_t> prim_materials;
-
-            cmesh4::SimpleMesh &simpleMesh = mg->mesh; 
             mg->is_loaded = true;
 
-            for(const auto &prim : mesh.primitives) {
-                if(prim.mode != TINYGLTF_MODE_TRIANGLES) {
-                    std::cerr << "[ERROR] Only triangle primitives are supported" << std::endl;
-                    return false;
-                }
+            std::vector<uint32_t> prim_materials;
+            prim_materials.reserve(mesh.primitives.size());
+            load_gltf_mesh(model, mesh, mg->mesh, prim_materials);
 
-                const gltf::Accessor& posAccessor = model.accessors[prim.attributes.at("POSITION")];
-                const gltf::Accessor& normAccessor = model.accessors[prim.attributes.at("NORMAL")];
-                const gltf::Accessor& tangAccessor = model.accessors[prim.attributes.at("TANGENT")];
-                const gltf::Accessor& indAcessor  = model.accessors[prim.indices];
-                append_float3_as_float4(model, posAccessor, simpleMesh.vPos4f);
-                append_float3_as_float4(model, normAccessor, simpleMesh.vNorm4f);
-                append_float3_as_float4(model, tangAccessor, simpleMesh.vTang4f);
-                append_indices(model, indAcessor, simpleMesh.indices);
+            //TODO add dummy material on request
+            mg->mesh.matIndices = std::move(prim_materials);
 
-                simpleMesh.vTexCoord2f.resize(simpleMesh.vPos4f.size());
-                simpleMesh.vTang4f.resize(simpleMesh.vPos4f.size());
-                simpleMesh.matIndices.push_back(only_geometry ? 0 : prim.material);
-            }
 
             geometries[id] = mg.release(); 
             id += 1;
@@ -409,8 +456,6 @@ namespace LiteScene
         model.accessors.push_back(std::move(acc));
         return acc_id;
     }
-
-
 
 
     bool save_gltf_mesh(gltf::Model &model, const MeshGeometry &mesh_geom, bool only_geometry)
