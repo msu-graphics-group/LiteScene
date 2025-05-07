@@ -331,7 +331,7 @@ namespace LiteScene
     std::string ws2s(const std::wstring& wstr);
 
     bool load_gltf_scene(const std::string &filename, HydraScene &scene, bool only_geometry = false);
-    bool save_as_gltf_scene(const std::string &filename, const HydraScene &scene, bool only_geometry = false);
+    bool save_as_gltf_scene(const std::string &filename, const HydraScene &scene, bool strict = true, bool only_geometry = false);
 }
 
 #endif

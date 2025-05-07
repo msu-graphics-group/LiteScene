@@ -245,7 +245,7 @@ namespace LiteScene
     {
         InstancedScene out;
         out.id = id;
-        out.name = "gltf-scene#" + std::to_string(id);
+        out.name = scene.name.size() ? scene.name : ("gltf-scene#" + std::to_string(id));
 
         uint32_t inst_id = 0;
         uint32_t linst_id = 0;
@@ -278,7 +278,7 @@ namespace LiteScene
         return {std::move(out)};
     }
 
-    static bool load_gltf_scenes(const gltf::Model &model, std::map<uint32_t, InstancedScene> &scenes, std::map<uint32_t, Camera> &cameras)
+    static bool load_gltf_scene_insts(const gltf::Model &model, std::map<uint32_t, InstancedScene> &scenes, std::map<uint32_t, Camera> &cameras)
     {
         uint32_t i = 0;
         for(const auto &scene : model.scenes) {
@@ -348,7 +348,7 @@ namespace LiteScene
 
         if(!load_gltf_meshes(model, scene.geometries, only_geometry)) return false;
         if(!load_gltf_cameras(model, scene.cameras)) return false;
-        if(!load_gltf_scenes(model, scene.scenes, scene.cameras)) return false;
+        if(!load_gltf_scene_insts(model, scene.scenes, scene.cameras)) return false;
 
         return true;
     }

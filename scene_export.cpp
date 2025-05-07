@@ -15,7 +15,13 @@
 
 namespace LiteScene {
 
-    inline std::unordered_map<uint32_t, std::vector<uint32_t>> group_by_material(const std::vector<unsigned> &indices, const std::vector<unsigned> &materials)
+#ifdef NDEBUG
+    static constexpr bool DEBUG_ENABLED = true;
+#else
+    static constexpr bool DEBUG_ENABLED = false;
+#endif
+    
+    static std::unordered_map<uint32_t, std::vector<uint32_t>> group_by_material(const std::vector<unsigned> &indices, const std::vector<unsigned> &materials)
     {
         std::unordered_map<uint32_t, std::vector<uint32_t>> groups;
         for(uint32_t i = 0; i < materials.size(); ++i) {
@@ -30,7 +36,7 @@ namespace LiteScene {
     /**
      * Returns ids of accessors to vectors
      */
-    inline std::tuple<int, int, int> write_vertices_to_buffer(gltf::Model &model, gltf::Buffer &buffer, int buf_id, //buffer is in model.buffers
+    static std::tuple<int, int, int> write_vertices_to_buffer(gltf::Model &model, gltf::Buffer &buffer, int buf_id, //buffer is in model.buffers
                                                               const std::vector<LiteMath::float4> &pos4f,
                                                               const std::vector<LiteMath::float4> &norm4f,
                                                               const std::vector<LiteMath::float4> &tang4f)
@@ -98,7 +104,7 @@ namespace LiteScene {
     /**
      * Returns if of accessor to indices 
      */
-    int write_indices_to_buffer(gltf::Model &model, gltf::Buffer &buffer, int buf_id, const std::vector<unsigned> &indices)
+    static int write_indices_to_buffer(gltf::Model &model, gltf::Buffer &buffer, int buf_id, const std::vector<unsigned> &indices)
     {
         size_t offset = buffer.data.size();
 
@@ -134,7 +140,7 @@ namespace LiteScene {
     }
 
 
-    bool cvt_gltf_mesh(gltf::Model &model, const MeshGeometry &mesh_geom, bool only_geometry)
+    static bool cvt_gltf_mesh(gltf::Model &model, const MeshGeometry &mesh_geom, bool only_geometry)
     {
         const int buf_id = int(model.buffers.size());
         gltf::Buffer &buffer = model.buffers.emplace_back();
@@ -168,7 +174,7 @@ namespace LiteScene {
         return true;
     }
 
-    bool cvt_gltf_meshes(gltf::Model &model, const std::map<uint32_t, Geometry *> &geometries, const SceneMetadata &meta, bool only_geometry)
+    static bool cvt_gltf_meshes(gltf::Model &model, const std::map<uint32_t, Geometry *> &geometries, const SceneMetadata &meta, bool only_geometry)
     {
         model.meshes.reserve(geometries.size());
         if(geometries.rbegin()->first != geometries.size() - 1) {
@@ -191,11 +197,11 @@ namespace LiteScene {
     }
 
    
-    gltf::Value gltfIntValue(int val) {
+    static gltf::Value gltfIntValue(int val) {
         return gltf::Value(val);
     }
 
-    bool cvt_hydragltf_to_gltf(gltf::Model &model, const GltfMaterial &mat, std::vector<H2GTextureConv> &texture_map)
+    static bool cvt_hydragltf_to_gltf(gltf::Model &model, const GltfMaterial &mat, std::vector<H2GTextureConv> &texture_map)
     {
         gltf::Material &material = model.materials.emplace_back();
         auto &mr = material.pbrMetallicRoughness;
@@ -280,7 +286,7 @@ namespace LiteScene {
         return true;
     }
 
-    bool cvt_gltf_materials(gltf::Model &model, const std::map<uint32_t, Material *> &materials, std::vector<H2GTextureConv> &texture_map, bool strict_mode = true)
+    static bool cvt_gltf_materials(gltf::Model &model, const std::map<uint32_t, Material *> &materials, std::vector<H2GTextureConv> &texture_map, bool strict_mode)
     {
         model.materials.reserve(materials.size());
         if(materials.rbegin()->first != materials.size() - 1) {
@@ -305,24 +311,73 @@ namespace LiteScene {
         return true;
     }
 
-    bool transform_textures(gltf::Model &model, const std::map<uint32_t, Texture> &textures, const std::vector<H2GTextureConv> &tex_map)
+    static bool transform_textures(gltf::Model &model, const std::map<uint32_t, Texture> &textures, const std::vector<H2GTextureConv> &tex_map)
     {
         return false;
     }
 
-    bool save_as_gltf_scene(const std::string &filename, const HydraScene &scene, bool only_geometry)
+    static inline void matrix_to_array(const LiteMath::float4x4 &matrix, std::vector<double> &array)
+    {
+        array.resize(16);
+        for(int i = 0; i < 4; ++i) {
+            auto vec = matrix.get_row(i);
+            std::copy(vec.M, vec.M + 4, array.data() + 4 * i);
+        }
+    } 
+
+    static inline bool cvt_gltf_scene_inst(gltf::Model &model, const InstancedScene &instScene, bool strict)
+    {
+        gltf::Scene scene;
+        scene.name = instScene.name;
+
+        for(const auto &[inst_id, inst] : instScene.instances) {
+            gltf::Node node;
+            node.mesh = inst.mesh_id;
+
+            if(inst.rmap_id != INVALID_ID) {
+                std::cerr << (strict ? "[scene_convert ERROR]" : "[scene_export WARNING]");
+                std::cerr << "Remap lists are not supported for instanced scene '" << scene.name << "'" << std::endl;
+                if(strict) return false;
+            }
+
+            if(inst.light_id != INVALID_ID) {
+                std::cerr << "[scene_convert WARNING] Ignoring parameter light_id for instanced scene '" << scene.name << "'" << std::endl;
+            } 
+            if(inst.linst_id != INVALID_ID) {
+                std::cerr << "[scene_convert WARNING] Ignoring parameter linst_id for instanced scene '" << scene.name << "'" << std::endl;
+            } 
+
+            matrix_to_array(inst.matrix, node.matrix);
+
+            scene.nodes.push_back(model.nodes.size());
+            model.nodes.push_back(std::move(node));
+        }
+        model.scenes.push_back(std::move(scene));
+        return true;
+    }
+
+    static bool cvt_gltf_scenes_insts(gltf::Model &model, const std::map<uint32_t, InstancedScene> &scenes, bool strict)
+    {
+        for(const auto &[id, instance] : scenes) {
+            if(!cvt_gltf_scene_inst(model, instance, strict)) return false;
+        }
+        return true;
+    }
+
+    bool save_as_gltf_scene(const std::string &filename, const HydraScene &scene, bool only_geometry, bool strict)
     {
         gltf::Model model;
         std::vector<H2GTextureConv> texture_map;
 
-        if(!only_geometry && !cvt_gltf_materials(model, scene.materials, texture_map)) return false;
+        if(!only_geometry && !cvt_gltf_materials(model, scene.materials, texture_map, strict)) return false;
         if(!cvt_gltf_meshes(model, scene.geometries, scene.metadata, only_geometry)) return false;
+        if(!cvt_gltf_scenes_insts(model, scene.scenes, strict)) return false;
 
         gltf::TinyGLTF loader;
         loader.WriteGltfSceneToFile(&model, filename,
                            true, // embedImages
                            true, // embedBuffers
-                           true, // pretty print
+                           DEBUG_ENABLED, // pretty print
                            false); // write binary
 
         return true;
