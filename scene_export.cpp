@@ -20,7 +20,7 @@ namespace LiteScene {
 #else
     static constexpr bool DEBUG_ENABLED = false;
 #endif
-    
+
     static std::unordered_map<uint32_t, std::vector<uint32_t>> group_by_material(const std::vector<unsigned> &indices, const std::vector<unsigned> &materials)
     {
         std::unordered_map<uint32_t, std::vector<uint32_t>> groups;
@@ -140,7 +140,7 @@ namespace LiteScene {
     }
 
 
-    static bool cvt_gltf_mesh(gltf::Model &model, const MeshGeometry &mesh_geom, bool only_geometry)
+    static bool gltfcvt_mesh(gltf::Model &model, const MeshGeometry &mesh_geom, bool only_geometry)
     {
         const int buf_id = int(model.buffers.size());
         gltf::Buffer &buffer = model.buffers.emplace_back();
@@ -174,11 +174,11 @@ namespace LiteScene {
         return true;
     }
 
-    static bool cvt_gltf_meshes(gltf::Model &model, const std::map<uint32_t, Geometry *> &geometries, const SceneMetadata &meta, bool only_geometry)
+    static bool gltfcvt_meshes(gltf::Model &model, const std::map<uint32_t, Geometry *> &geometries, const SceneMetadata &meta, bool only_geometry)
     {
         model.meshes.reserve(geometries.size());
         if(geometries.rbegin()->first != geometries.size() - 1) {
-            std::cerr << "[scene_convert ERROR] Inconsistent mesh ids" << std::endl;
+            std::cerr << "[scene_export ERROR] Inconsistent mesh ids" << std::endl;
             return false;
         }
 
@@ -189,7 +189,7 @@ namespace LiteScene {
             MeshGeometry *mesh_geom = static_cast<MeshGeometry *>(geom);
             mesh_geom->load_data(meta);
 
-            if(!cvt_gltf_mesh(model, *mesh_geom, only_geometry)) {
+            if(!gltfcvt_mesh(model, *mesh_geom, only_geometry)) {
                 return false;
             }
         }
@@ -201,7 +201,7 @@ namespace LiteScene {
         return gltf::Value(val);
     }
 
-    static bool cvt_hydragltf_to_gltf(gltf::Model &model, const GltfMaterial &mat, std::vector<H2GTextureConv> &texture_map)
+    static bool gltfcvt_hydragltf_mat(gltf::Model &model, const GltfMaterial &mat, std::vector<H2GTextureConv> &texture_map)
     {
         gltf::Material &material = model.materials.emplace_back();
         auto &mr = material.pbrMetallicRoughness;
@@ -286,25 +286,25 @@ namespace LiteScene {
         return true;
     }
 
-    static bool cvt_gltf_materials(gltf::Model &model, const std::map<uint32_t, Material *> &materials, std::vector<H2GTextureConv> &texture_map, bool strict_mode)
+    static bool gltfcvt_materials(gltf::Model &model, const std::map<uint32_t, Material *> &materials, std::vector<H2GTextureConv> &texture_map, bool strict_mode)
     {
         model.materials.reserve(materials.size());
-        if(materials.rbegin()->first != materials.size() - 1) {
-            std::cerr << "[scene_convert ERROR] Inconsistent material ids" << std::endl;
+        if(materials.size() && materials.rbegin()->first != materials.size() - 1) {
+            std::cerr << "[scene_export ERROR] Inconsistent material ids" << std::endl;
             return false;
         }
 
         for(const auto &[id, mat] : materials) {
             if(mat->type() != MaterialType::GLTF) {
                 if(strict_mode) {
-                    std::cerr << "[scene_convert ERROR] Only HydraGLTF materials can be converted to glTF, id = " << id << " cannot be processed" << std::endl;
+                    std::cerr << "[scene_export ERROR] Only HydraGLTF materials can be converted to glTF, id = " << id << " cannot be processed" << std::endl;
                     return false;
                 }
                 else {
-                    std::cerr << "[scene_convert WARNING] Only HydraGLTF materials can be converted to glTF, using dummy material for id = " << id << std::endl;
+                    std::cerr << "[scene_export WARNING] Only HydraGLTF materials can be converted to glTF, using dummy material for id = " << id << std::endl;
                 }
             }
-            else if(!cvt_hydragltf_to_gltf(model, *static_cast<const GltfMaterial *>(mat), texture_map)) {
+            else if(!gltfcvt_hydragltf_mat(model, *static_cast<const GltfMaterial *>(mat), texture_map)) {
                 return false;
             }
         }
@@ -320,12 +320,64 @@ namespace LiteScene {
     {
         array.resize(16);
         for(int i = 0; i < 4; ++i) {
-            auto vec = matrix.get_row(i);
+            auto vec = matrix.get_col(i);
             std::copy(vec.M, vec.M + 4, array.data() + 4 * i);
         }
-    } 
+    }
 
-    static inline bool cvt_gltf_scene_inst(gltf::Model &model, const InstancedScene &instScene, bool strict)
+    static inline void cam_params_to_array(const Camera &cam, std::vector<double> &array)
+    {
+        if(cam.has_matrix) {
+            matrix_to_array(cam.matrix, array);
+        }
+        else {
+            auto forward = cam.lookAt - cam.pos;
+            auto right = LiteMath::cross(forward, cam.up);
+            array = {
+                right.x,      right.y,      right.z,      0,
+                cam.up.x,     cam.up.y,     cam.up.z,     0,
+               -forward.x,  -forward.y,   -forward.z,    0,
+                cam.pos.x,    cam.pos.y,    cam.pos.z,    1
+            };
+            /*
+            array = {
+                right.x, cam.up.x, cam.lookAt.z, cam.pos.x,
+                right.y, cam.up.y, cam.lookAt.y, cam.pos.y,
+                right.z, cam.up.x, cam.lookAt.z, cam.pos.z,
+                0,       0,        0,            1
+            };*/
+        }
+    }
+
+    static inline bool gltfcvt_cameras(gltf::Model &model, const std::map<uint32_t, Camera> &cams, std::vector<int> &cam_nodes)
+    {
+        for(const auto &[cam_id, cam] : cams) {
+            gltf::Camera gltf_cam;
+            gltf_cam.name = cam.name;
+            gltf_cam.type = "perspective";
+
+            gltf_cam.perspective.yfov = cam.fov;
+            gltf_cam.perspective.znear = cam.nearPlane;
+            gltf_cam.perspective.zfar = cam.farPlane;
+
+
+            int id = model.cameras.size();
+            model.cameras.push_back(std::move(gltf_cam));
+
+
+            gltf::Node cam_node;
+            cam_node.name = "cam_node[" + cam.name + "]";
+            cam_node.camera = id;
+
+            cam_params_to_array(cam, cam_node.matrix);
+
+            model.nodes.push_back(std::move(cam_node));
+            cam_nodes.push_back(model.nodes.size() - 1);
+        }
+        return true;
+    }
+
+    static inline bool gltfcvt_scene_inst(gltf::Model &model, const InstancedScene &instScene, const std::vector<int> &camera_nodes, bool strict)
     {
         gltf::Scene scene;
         scene.name = instScene.name;
@@ -335,16 +387,16 @@ namespace LiteScene {
             node.mesh = inst.mesh_id;
 
             if(inst.rmap_id != INVALID_ID) {
-                std::cerr << (strict ? "[scene_convert ERROR]" : "[scene_export WARNING]");
+                std::cerr << (strict ? "[scene_export ERROR]" : "[scene_export WARNING]");
                 std::cerr << "Remap lists are not supported for instanced scene '" << scene.name << "'" << std::endl;
                 if(strict) return false;
             }
 
             if(inst.light_id != INVALID_ID) {
-                std::cerr << "[scene_convert WARNING] Ignoring parameter light_id for instanced scene '" << scene.name << "'" << std::endl;
+                std::cerr << "[scene_export WARNING] Ignoring parameter light_id for instanced scene '" << scene.name << "'" << std::endl;
             } 
             if(inst.linst_id != INVALID_ID) {
-                std::cerr << "[scene_convert WARNING] Ignoring parameter linst_id for instanced scene '" << scene.name << "'" << std::endl;
+                std::cerr << "[scene_export WARNING] Ignoring parameter linst_id for instanced scene '" << scene.name << "'" << std::endl;
             } 
 
             matrix_to_array(inst.matrix, node.matrix);
@@ -352,32 +404,37 @@ namespace LiteScene {
             scene.nodes.push_back(model.nodes.size());
             model.nodes.push_back(std::move(node));
         }
+
+        std::copy(camera_nodes.begin(), camera_nodes.end(), std::back_inserter(scene.nodes));
+
         model.scenes.push_back(std::move(scene));
         return true;
     }
 
-    static bool cvt_gltf_scenes_insts(gltf::Model &model, const std::map<uint32_t, InstancedScene> &scenes, bool strict)
+    static bool gltfcvt_scenes_insts(gltf::Model &model, const std::map<uint32_t, InstancedScene> &scenes, const std::vector<int> &camera_nodes, bool strict)
     {
         for(const auto &[id, instance] : scenes) {
-            if(!cvt_gltf_scene_inst(model, instance, strict)) return false;
+            if(!gltfcvt_scene_inst(model, instance, camera_nodes, strict)) return false;
         }
         return true;
     }
 
-    bool save_as_gltf_scene(const std::string &filename, const HydraScene &scene, bool only_geometry, bool strict)
+    bool save_as_gltf_scene(const std::string &filename, const HydraScene &scene, bool strict, bool only_geometry)
     {
         gltf::Model model;
         std::vector<H2GTextureConv> texture_map;
+        std::vector<int> cam_nodes;
 
-        if(!only_geometry && !cvt_gltf_materials(model, scene.materials, texture_map, strict)) return false;
-        if(!cvt_gltf_meshes(model, scene.geometries, scene.metadata, only_geometry)) return false;
-        if(!cvt_gltf_scenes_insts(model, scene.scenes, strict)) return false;
+        if(!only_geometry && !gltfcvt_materials(model, scene.materials, texture_map, strict)) return false;
+        if(!gltfcvt_meshes(model, scene.geometries, scene.metadata, only_geometry)) return false;
+        if(!gltfcvt_cameras(model, scene.cameras, cam_nodes)) return false;
+        if(!gltfcvt_scenes_insts(model, scene.scenes, cam_nodes, strict)) return false;
 
         gltf::TinyGLTF loader;
         loader.WriteGltfSceneToFile(&model, filename,
                            true, // embedImages
                            true, // embedBuffers
-                           DEBUG_ENABLED, // pretty print
+                           true || DEBUG_ENABLED, // pretty print
                            false); // write binary
 
         return true;

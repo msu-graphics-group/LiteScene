@@ -295,12 +295,15 @@ namespace LiteScene
     static bool load_gltf_cameras(const gltf::Model &model, std::map<uint32_t, Camera> &cameras)
     {
         uint32_t id = 0;
-        if(!model.cameras.empty()) {
+        if(model.cameras.empty()) {
+            std::cerr << "[scene_convert WARNING] No cameras found in gltf scene" << std::endl;
+        }
+        else {
             for(const auto &gltfCam : model.cameras) {
                 const auto &cam = gltfCam.perspective;
                 Camera camera;
                 camera.id = id;
-                camera.name = "gltf-camera#" + std::to_string(id);
+                camera.name = gltfCam.name.size() ? gltfCam.name : ("gltf-camera#" + std::to_string(id));
                 id += 1;
 
                 camera.fov = cam.yfov;
