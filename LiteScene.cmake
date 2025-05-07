@@ -8,7 +8,8 @@ set(LITESCENE_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/scene.cpp
     ${CMAKE_CURRENT_LIST_DIR}/scene_mat.cpp
     ${CMAKE_CURRENT_LIST_DIR}/scene_tex.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/scene_convert.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/scene_import.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/scene_export.cpp
 )
 
 set(LITESCENE_VK_SOURCES

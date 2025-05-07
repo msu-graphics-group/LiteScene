@@ -73,7 +73,8 @@ namespace LiteScene
     public:
         constexpr static uint32_t MESH_TYPE_ID   = 0;
         constexpr static uint32_t CUSTOM_TYPE_ID = 1000;
-
+        Geometry() = default;
+        Geometry(int ti) : type_id(ti) {}
         virtual ~Geometry() {}
         bool load_node_base(pugi::xml_node node);
         void save_node_base(pugi::xml_node &node) const;
@@ -94,6 +95,7 @@ namespace LiteScene
     class MeshGeometry : public Geometry
     {
     public:
+        MeshGeometry() : Geometry(Geometry::MESH_TYPE_ID) {}
         virtual ~MeshGeometry() {}
         bool load_node(pugi::xml_node node) override;
         bool save_node(pugi::xml_node &node) const override;
@@ -111,6 +113,7 @@ namespace LiteScene
     class CustomGeometry : public Geometry
     {
     public:
+        CustomGeometry() : Geometry(Geometry::CUSTOM_TYPE_ID) {}
         virtual ~CustomGeometry() {}
         bool load_node(pugi::xml_node node) override;
         bool save_node(pugi::xml_node &node) const override;
@@ -327,9 +330,8 @@ namespace LiteScene
     std::wstring s2ws(const std::string& str);
     std::string ws2s(const std::wstring& wstr);
 
-   // bool load_gltf_mesh(const std::string &filename, std::vector<Geometry *> &meshes);
     bool load_gltf_scene(const std::string &filename, HydraScene &scene, bool only_geometry = false);
-
+    bool save_as_gltf_scene(const std::string &filename, const HydraScene &scene, bool only_geometry = false);
 }
 
 #endif

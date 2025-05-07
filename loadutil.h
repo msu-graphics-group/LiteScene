@@ -11,9 +11,38 @@
 #include <filesystem>
 #include <numeric>
 
+#include "3rd_party/tiny_gltf.h"
+
+namespace gltf = tinygltf;
+
+
 namespace fs = std::filesystem;
 
 namespace LiteScene {
+
+    inline const std::string GLTF_EXT_FRESNEL_IOR = "KHR_materials_ior";
+    inline const std::string GLTF_EXT_CLEARCOAT   = "KHR_materials_clearcoat";
+    constexpr int GLTF_INVALID_ID = -1;
+
+    struct H2GTextureConv
+    {
+        /**
+         * remap contains 1 or 3 channels to be replaced starting from 1, 
+         * value of zero places empty channel,
+         * negative value inverts channel c with (1 - c)
+         */
+        std::vector<int> remap; 
+        std::vector<const TextureInstance *> textures;
+
+        static constexpr int REMAP_ONES = 4;
+        static constexpr int REMAP_ZEROS = 0;
+
+        H2GTextureConv() = default;
+        H2GTextureConv(const H2GTextureConv &) = default;
+        H2GTextureConv(H2GTextureConv &&) = default;
+        H2GTextureConv(const decltype(remap) &r, const decltype(textures) &t) : remap(r), textures(t) {}
+    };
+
 
     inline pugi::xml_node set_child(pugi::xml_node node, const pugi::char_t *name)
     {
