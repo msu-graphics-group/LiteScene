@@ -419,6 +419,175 @@ namespace LiteScene {
         return true;
     }
 
+    struct HTextureConv
+    {
+        std::vector<int> remap; 
+        std::vector<uint32_t> textures;
+        float gamma;
+
+        HTextureConv(const H2GTextureConv &conv)
+        {
+            remap = conv.remap;
+            for(const auto *t : conv.textures) textures.push_back(t->id);
+            gamma = conv.input_gamma;
+        }
+    };
+
+    struct HTextureConvHash
+    {
+        size_t operator()(const TextureConv &obj) const 
+        {
+            size_t res = 0ull;
+
+            for(int v : obj.remap) {
+                res = 31 * res + std::hash<int>{}(v);
+            }
+            for(uint32_t v : obj.textures) {
+                res = 31 * res + std::hash<uint32_t>{}(v);
+            }
+            res = 31 * res + std::hash<float>{}(obj.gamma);
+            return res;
+        }
+    };
+    using TextureConvCacheMap = std::unordered_map<HTextureConv, int, HTextureConvHash>;
+    using TextureSamplerCacheMap = std::unordered_map<TextureInstance::SamplerData, int, TexSamplerHash>;
+
+    static inline int gltfcvt_tex_wrap(LiteImage::Sampler::AddressMode mode)
+    {
+        switch(mode) {
+        case LiteImage::Sampler::AddressMode::MIRROR_ONCE:
+            std::cerr << "[scene_export WARNING] MIRROR_ONCE wrapping is not supported in glTF, using MIRROR" << std::endl;
+            [[fallthrough]];
+        case LiteImage::Sampler::AddressMode::MIRROR:
+            return TINYGLTF_TEXTURE_WRAP_MIRRORED_REPEAT;
+        case LiteImage::Sampler::AddressMode::CLAMP:
+            return TINYGLTF_TEXTURE_WRAP_CLAMP_TO_EDGE;
+        case LiteImage::Sampler::AddressMode::BORDER:
+            std::cerr << "[scene_export WARNING] BORDER wrapping is not supported in glTF, using WRAP" << std::endl;
+            [[fallthrough]];
+        case LiteImage::Sampler::AddressMode::WRAP:
+            return TINYGLTF_TEXTURE_WRAP_REPEAT;
+        }
+    }
+
+    static inline int gltfcvt_tex_filter(LiteImage::Sampler::Filter filter)
+    {
+        switch(filter) {
+        case LiteImage::Sampler::Filter::NEAREST:
+            return TINYGLTF_TEXTURE_FILTER_NEAREST;
+        case LiteImage::Sampler::Filter::CUBIC:
+            std::cerr << "[scene_export WARNING] CUBIC filtering is not supported in glTF, using LINEAR" << std::endl;
+            [[fallthrough]];
+        case LiteImage::Sampler::Filter::LINEAR:
+            return TINYGLTF_TEXTURE_FILTER_LINEAR;
+        }
+    }
+
+    static inline int get_or_convert_sampler(gltf::Model &model, const TextureInstance::SamplerData &sampler, TextureSamplerCacheMap &cache)
+    {
+        auto it = cache.find(sampler);
+        if(it != cache.end()) return it->second;
+
+        gltf::Sampler res;
+        res.wrapS = gltfcvt_tex_wrap(sampler.addr_mode_u);
+        res.wrapT = gltfcvt_tex_wrap(sampler.addr_mode_v);
+        res.minFilter = res.magFilter = gltfcvt_tex_filter(sampler.filter);
+
+        model.samplers.push_back(std::move(res));
+        return model.samplers.size() - 1;
+    }
+
+
+
+    static inline unsigned char do_remap(unsigned char rgb[3], int remap) {
+        switch(remap) {
+        case H2GTextureConv::REMAP_ONES:
+            return 255;
+        case H2GTextureConv::REMAP_ZEROS:
+            return 0;
+        default:
+            return rgb[remap - 1];
+        }
+    }
+
+    static bool load_texture1f(const Texture &tex, float gamma, unsigned char *out, int step = 1)
+    {
+        const Texture::Info &info = tex.getInfo();
+        LiteImage::Image2D<float> img = LiteImage::LoadImage<float>(info.path.c_str(), gamma);
+        if(img.width() != info.width || img.height() != info.height) {
+            std::cerr << "[scene_export ERROR] Incorrect size for texture: " << info.path << std::endl;
+            return false;
+        }
+        
+        size_t wh = img.width() * img.height();
+        for(size_t i = 0; i < wh; ++i) {
+            float pixel = img.data()[i];
+            out[step * i] = int(pixel * 255);
+        }
+        return true;
+    }
+
+    static bool load_texture3i(const Texture &tex, float gamma, unsigned char *out, int* remap, int step = 1)
+    {
+        const Texture::Info &info = tex.getInfo();
+        LiteImage::Image2D<uint32_t> img = LiteImage::LoadImage<uint32_t>(info.path.c_str(), gamma);
+        if(img.width() != info.width || img.height() != info.height) {
+            std::cerr << "[scene_export ERROR] Incorrect size for texture: " << info.path << std::endl;
+            return false;
+        }
+        
+        size_t wh = img.width() * img.height();
+        for(size_t i = 0; i < wh; ++i) {
+            uint32_t pixel = img.data()[i];
+            unsigned char rgb[3] = {pixel && 0xff, (pixel >> 8) && 0xff, (pixel >> 16) && 0xff};
+
+            out[step * i * 3 + 0] = do_remap(rgb, remap[0]);
+            out[step * i * 3 + 1] = do_remap(rgb, remap[1]);
+            out[step * i * 3 + 2] = do_remap(rgb, remap[2]);
+        }
+        return true;
+    }
+
+    static int get_or_convert_image(gltf::Model &model, const std::map<uint32_t, Texture> &textures, const H2GTextureConv &conv, TextureConvCacheMap &cache)
+    {
+        HTextureConv hconv{conv};
+        auto it = cache.find(hconv);
+        if(it != cache.end()) return it->second;
+
+        gltf::Image tex;
+
+
+    }
+
+    static bool gltfcvt_textures(gltf::Model &model, const std::map<uint32_t, Texture> &textures, const std::vector<H2GTextureConv> &texture_map, bool strict)
+    {
+        TextureConvCacheMap texture_conv_cache;
+        TextureSamplerCacheMap texture_samplers_cache;
+
+        for(size_t i = 0; i < texture_map.size(); ++i) {
+            const H2GTextureConv &conv = texture_map[i];
+
+            if(conv.textures.size() > 1) {
+                bool different_samplers = conv.textures[0]->sampler != conv.textures[1]->sampler;
+                different_samplers = different_samplers || (conv.textures.size() == 3 && conv.textures[0]->sampler != conv.textures[2]->sampler);
+                if(different_samplers) {
+                    std::cerr << (strict ? "[scene_export ERROR]" : "[scene_export WARNING]");
+                    std::cerr << "Different samplers for merged textures" << std::endl;
+                    if(strict) return false;
+                } 
+            }
+
+
+            const int image = get_or_convert_image(model, textures, conv, texture_conv_cache);
+            const int sampler = get_or_convert_sampler(model, conv.textures[0]->sampler, texture_samplers_cache);
+
+            gltf::Texture tex{.sampler = sampler, .source = image};
+            model.textures.push_back(std::move(tex));
+        }
+
+        return true;
+    }
+
     bool save_as_gltf_scene(const std::string &filename, const HydraScene &scene, bool strict, bool only_geometry)
     {
         gltf::Model model;

@@ -43,7 +43,6 @@ namespace LiteScene {
         H2GTextureConv(const decltype(remap) &r, const decltype(textures) &t) : remap(r), textures(t) {}
     };
 
-
     inline pugi::xml_node set_child(pugi::xml_node node, const pugi::char_t *name)
     {
         pugi::xml_node child = node.child(name) ? node.child(name) : node.append_child(name);

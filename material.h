@@ -10,12 +10,22 @@ namespace LiteScene {
 
     struct TexSamplerHash
     {
+        std::size_t operator()(const TextureInstance::SamplerData &s) const 
+        {
+            std::size_t res = std::hash<uint32_t>{}(static_cast<uint32_t>(s.first.addr_mode_u)) * 31ull
+                            + std::hash<uint32_t>{}(static_cast<uint32_t>(s.first.addr_mode_v)) * 31ull
+                            + std::hash<uint32_t>{}(static_cast<uint32_t>(s.first.addr_mode_w)) * 31ull
+                            + std::hash<uint32_t>{}(static_cast<uint32_t>(s.first.filter));
+
+            return res;
+        }
+    };
+
+    struct TexSamplerBoolHash
+    {
         std::size_t operator()(const std::pair<TextureInstance::SamplerData, bool> &s) const 
         {
-            std::size_t res = std::hash<uint64_t>{}(static_cast<uint64_t>(s.first.addr_mode_u)) * 31ull
-                            + std::hash<uint64_t>{}(static_cast<uint64_t>(s.first.addr_mode_v)) * 31ull
-                            + std::hash<uint64_t>{}(static_cast<uint64_t>(s.first.addr_mode_w)) * 31ull
-                            + std::hash<uint64_t>{}(static_cast<uint64_t>(s.first.filter)) * 31ull
+            std::size_t res = TexSamplerHash{}(s.first) * 31ull
                             + std::hash<bool>{}(s.second);
 
             return res;
