@@ -1,4 +1,6 @@
 #include "scene.h"
+#define TINYGLTF_NO_INCLUDE_STB_IMAGE
+#define TINYGLTF_NO_INCLUDE_STB_IMAGE_WRITE
 #include "loadutil.h"
 
 #include <fstream>
@@ -7,7 +9,9 @@
 #include <vector>
 #include <algorithm>
 
+//#ifndef LITESCENE_NOTINYEXR
 #define TINYEXR_IMPLEMENTATION
+//#endif
 #include "3rd_party/tinyexr/tinyexr.h"
 
 // Undefine macro from windows headers
@@ -121,7 +125,7 @@ namespace LiteScene
         return out;
     }
 
-    std::shared_ptr<LiteImage::ICombinedImageSampler> make_combined_sampler(Texture::Info &info, const TextureInstance &inst)
+    std::shared_ptr<LiteImage::ICombinedImageSampler> make_combined_sampler(const Texture::Info &info, const TextureInstance &inst)
     {
         std::shared_ptr<LiteImage::ICombinedImageSampler> pResult;
 
@@ -194,7 +198,7 @@ namespace LiteScene
         return pResult;
     }
 
-    std::shared_ptr<LiteImage::ICombinedImageSampler> Texture::get_combined_sampler(const TextureInstance &inst)
+    std::shared_ptr<LiteImage::ICombinedImageSampler> Texture::get_combined_sampler(const TextureInstance &inst) const
     {
         std::pair<TextureInstance::SamplerData, bool> sd = {inst.sampler, inst.input_gamma == 1.0f};
         auto it = tex_cache.find(sd);

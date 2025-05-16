@@ -19,10 +19,10 @@ namespace LiteScene
     struct TextureInstance
     {
         struct SamplerData {
-            LiteImage::Sampler::AddressMode addr_mode_u;
-            LiteImage::Sampler::AddressMode addr_mode_v;
-            LiteImage::Sampler::AddressMode addr_mode_w;
-            LiteImage::Sampler::Filter filter;
+            LiteImage::Sampler::AddressMode addr_mode_u = LiteImage::Sampler::AddressMode::WRAP;
+            LiteImage::Sampler::AddressMode addr_mode_v = LiteImage::Sampler::AddressMode::WRAP;
+            LiteImage::Sampler::AddressMode addr_mode_w = LiteImage::Sampler::AddressMode::WRAP;
+            LiteImage::Sampler::Filter filter = LiteImage::Sampler::Filter::NEAREST;
 
             bool operator==(const SamplerData &other) const
             {

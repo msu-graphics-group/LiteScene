@@ -209,7 +209,8 @@ namespace LiteScene {
         if(std::holds_alternative<TextureInstance>(mat.color)) {
             const TextureInstance &inst = std::get<TextureInstance>(mat.color);
 
-            texture_map.emplace_back(std::vector{1, 2, 3}, std::vector{&inst});
+            texture_map.emplace_back(std::vector{1, 2, 3, H2GTextureConv::REMAP_ONES}, std::vector{&inst});
+
             mr.baseColorTexture.index = texture_map.size() - 1;
         }
         else {
@@ -223,7 +224,7 @@ namespace LiteScene {
             texture_map.emplace_back(std::vector{H2GTextureConv::REMAP_ZEROS, -1, 2}, std::vector{&gmcInst});
             mr.metallicRoughnessTexture = gltf::TextureInfo{.index = int(texture_map.size()) - 1};
 
-            texture_map.emplace_back(std::vector{3}, std::vector{&gmcInst});
+            texture_map.emplace_back(std::vector{3}, std::vector{&gmcInst}); //FIXME
             gltf::Value::Object clearcoat;
             clearcoat["clearcoatFactor"] = gltf::Value(1.0); //?
             clearcoat["clearcoatTexture"] = gltf::Value(gltf::Value::Object{{"index", gltfIntValue(texture_map.size() - 1)}});
@@ -232,7 +233,7 @@ namespace LiteScene {
         else {
 
             GltfMaterial::GMC gmc = std::get<GltfMaterial::GMC>(mat.glossiness_metalness_coat);
-            H2GTextureConv conv{{H2GTextureConv::REMAP_ZEROS, H2GTextureConv::REMAP_ONES, H2GTextureConv::REMAP_ONES}, {}};
+            H2GTextureConv conv{{H2GTextureConv::REMAP_ZEROS, H2GTextureConv::REMAP_ONES, H2GTextureConv::REMAP_ONES, H2GTextureConv::REMAP_ONES}, {}};
             bool useTexture = false;
 
             if(std::holds_alternative<float>(gmc.glossiness)) {
@@ -259,7 +260,7 @@ namespace LiteScene {
 
             if(useTexture) {
                 texture_map.push_back(std::move(conv));
-                mr.metallicRoughnessTexture = gltf::TextureInfo{.index = int(texture_map.size()) - 1};
+                mr.metallicRoughnessTexture = gltf::TextureInfo{.index = int(texture_map.size() - 1)};
             }
 
             gltf::Value::Object clearcoat;
@@ -268,7 +269,7 @@ namespace LiteScene {
                 clearcoat["clearcoatFactor"] = gltf::Value(coat);
             }
             else {
-                const TextureInstance &gInst = std::get<TextureInstance>(gmc.glossiness);  
+                const TextureInstance &gInst = std::get<TextureInstance>(gmc.coat);  
                 texture_map.emplace_back(std::vector{1}, std::vector{&gInst});
 
                 clearcoat["clearcoatFactor"] = gltf::Value(1.0); //?
@@ -388,7 +389,7 @@ namespace LiteScene {
 
             if(inst.rmap_id != INVALID_ID) {
                 std::cerr << (strict ? "[scene_export ERROR]" : "[scene_export WARNING]");
-                std::cerr << "Remap lists are not supported for instanced scene '" << scene.name << "'" << std::endl;
+                std::cerr << " Remap lists are not supported for instanced scene '" << scene.name << "'" << std::endl;
                 if(strict) return false;
             }
 
@@ -429,13 +430,18 @@ namespace LiteScene {
         {
             remap = conv.remap;
             for(const auto *t : conv.textures) textures.push_back(t->id);
-            gamma = conv.input_gamma;
+            gamma = conv.textures[0]->input_gamma;
+        }
+
+        bool operator==(const HTextureConv &other) const 
+        {
+            return (remap == other.remap) && (textures == other.textures) && (gamma == other.gamma); 
         }
     };
 
     struct HTextureConvHash
     {
-        size_t operator()(const TextureConv &obj) const 
+        size_t operator()(const HTextureConv &obj) const 
         {
             size_t res = 0ull;
 
@@ -468,6 +474,7 @@ namespace LiteScene {
         case LiteImage::Sampler::AddressMode::WRAP:
             return TINYGLTF_TEXTURE_WRAP_REPEAT;
         }
+        return TINYGLTF_TEXTURE_WRAP_REPEAT;
     }
 
     static inline int gltfcvt_tex_filter(LiteImage::Sampler::Filter filter)
@@ -481,6 +488,7 @@ namespace LiteScene {
         case LiteImage::Sampler::Filter::LINEAR:
             return TINYGLTF_TEXTURE_FILTER_LINEAR;
         }
+        return TINYGLTF_TEXTURE_FILTER_NEAREST;
     }
 
     static inline int get_or_convert_sampler(gltf::Model &model, const TextureInstance::SamplerData &sampler, TextureSamplerCacheMap &cache)
@@ -499,67 +507,131 @@ namespace LiteScene {
 
 
 
-    static inline unsigned char do_remap(unsigned char rgb[3], int remap) {
+    static inline unsigned char do_remap(unsigned char rgb[4], int remap) {
         switch(remap) {
         case H2GTextureConv::REMAP_ONES:
             return 255;
         case H2GTextureConv::REMAP_ZEROS:
             return 0;
         default:
-            return rgb[remap - 1];
+            unsigned char val = rgb[std::abs(remap) - 1];
+            return remap < 0 ? 255 - val : val;
         }
     }
 
-    static bool load_texture1f(const Texture &tex, float gamma, unsigned char *out, int step = 1)
+    static void fill_value1(int w, int h, unsigned char val, unsigned char *out, int ch_out)
     {
-        const Texture::Info &info = tex.getInfo();
-        LiteImage::Image2D<float> img = LiteImage::LoadImage<float>(info.path.c_str(), gamma);
-        if(img.width() != info.width || img.height() != info.height) {
-            std::cerr << "[scene_export ERROR] Incorrect size for texture: " << info.path << std::endl;
-            return false;
+        for(int i = 0; i < h; ++i) {
+            for(int j = 0; j < w; ++j) {
+                out[0] = val;
+                out += ch_out;
+            }
         }
-        
-        size_t wh = img.width() * img.height();
-        for(size_t i = 0; i < wh; ++i) {
-            float pixel = img.data()[i];
-            out[step * i] = int(pixel * 255);
+    }
+
+    static bool load_texture1(const Texture &tex, int w, int h, float gamma, bool invert, unsigned char *out, int ch_out)
+    {
+        TextureInstance inst;
+        //inst.input_gamma = gamma;
+        auto csampler = tex.get_combined_sampler(inst);
+
+        for(int i = 0; i < h; ++i) {
+            for(int j = 0; j < w; ++j) {
+                LiteMath::float4 pixel = csampler->sample({float(j) / float(w), float(i) / float(h)});
+                if(LiteMath::hmax(pixel) > 1.0f  || LiteMath::hmin(pixel) < 0.0f) {
+                    std::cerr << "[scene_export ERROR] Illegal value in pixel " << j << " " << i << " in " << tex.get_info().path << std::endl;
+                    return false;
+                }
+                unsigned char val = int(pixel.x * 255);
+                out[0] = invert ? 255 - val : val;
+                out += ch_out;
+            }
         }
         return true;
     }
 
-    static bool load_texture3i(const Texture &tex, float gamma, unsigned char *out, int* remap, int step = 1)
+    //sets each (0 + k * ch_out),... pixels in out according to remap
+    static bool load_texture(const Texture &tex, int w, int h, float gamma, const std::vector<int> &remap, unsigned char *out, int ch_out)
     {
-        const Texture::Info &info = tex.getInfo();
-        LiteImage::Image2D<uint32_t> img = LiteImage::LoadImage<uint32_t>(info.path.c_str(), gamma);
-        if(img.width() != info.width || img.height() != info.height) {
-            std::cerr << "[scene_export ERROR] Incorrect size for texture: " << info.path << std::endl;
-            return false;
-        }
-        
-        size_t wh = img.width() * img.height();
-        for(size_t i = 0; i < wh; ++i) {
-            uint32_t pixel = img.data()[i];
-            unsigned char rgb[3] = {pixel && 0xff, (pixel >> 8) && 0xff, (pixel >> 16) && 0xff};
+        TextureInstance inst;
+        inst.input_gamma = gamma;
+        auto csampler = tex.get_combined_sampler(inst);
 
-            out[step * i * 3 + 0] = do_remap(rgb, remap[0]);
-            out[step * i * 3 + 1] = do_remap(rgb, remap[1]);
-            out[step * i * 3 + 2] = do_remap(rgb, remap[2]);
+        for(int i = 0; i < h; ++i) {
+            for(int j = 0; j < w; ++j) {
+                LiteMath::float4 pixel = csampler->sample({float(j) / float(w), 1 - float(i) / float(h)});
+                pixel = LiteMath::clamp(pixel, 0.0f, 1.0f);
+                unsigned char rgb[] = {int(pixel.x * 255), int(pixel.y * 255), int(pixel.z * 255), int(pixel.w * 255)};
+                for(int i = 0; i < remap.size() && i < ch_out; ++i) {
+                    out[i] = do_remap(rgb, remap[i]);
+                }
+                out += ch_out;
+            }
         }
         return true;
     }
 
-    static int get_or_convert_image(gltf::Model &model, const std::map<uint32_t, Texture> &textures, const H2GTextureConv &conv, TextureConvCacheMap &cache)
+    int fill_remap_or_texture1(int w, int h, int remap, unsigned char *out, int ch_out, int &tex_id)
+    {
+        switch(remap) {
+        case H2GTextureConv::REMAP_ONES:
+            fill_value1(w, h, 255, out, ch_out);
+            return 0;
+        case H2GTextureConv::REMAP_ZEROS:
+            fill_value1(w, h, 0, out, ch_out);
+            return 0;
+        default:
+            tex_id = remap;
+            return 1;
+        }
+    }
+
+    static int get_or_convert_image(gltf::Model &model, const fs::path &scene_root, const std::map<uint32_t, Texture> &textures, const H2GTextureConv &conv, TextureConvCacheMap &cache)
     {
         HTextureConv hconv{conv};
         auto it = cache.find(hconv);
         if(it != cache.end()) return it->second;
 
+        const Texture &texture0 = textures.at(conv.textures[0]->id);
+        std::string name = "image_" + std::to_string(model.images.size());
+        const Texture::Info &info = texture0.get_info();
+
         gltf::Image tex;
+        tex.name = name;
+        tex.width = info.width;
+        tex.height = info.height;
+        tex.bits = 8;
+        tex.pixel_type = TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE;
+        tex.uri = scene_root / (name + ".png"); 
+
+        if(conv.textures.size() == 1) {
+            std::cout << texture0.name << " -> " << name << std::endl;
+            tex.component = conv.remap.size();
+            tex.image.resize(tex.width * tex.height * tex.component);
+            load_texture(texture0, info.width, info.height, 1.0f, conv.remap, tex.image.data(), tex.component);
+        }
+        else {
+            tex.component = conv.remap.size();
+            tex.image.resize(tex.width * tex.height * tex.component);
+            for(int i = 0; i < conv.remap.size(); ++i) {
+                int tex_val;
+                if(fill_remap_or_texture1(info.width, info.height, conv.remap[i], tex.image.data() + i, tex.component, tex_val)) {
+                    const Texture &texture = textures.at(std::abs(tex_val) - 1); 
+                    std::cout << texture.name << " ";
+                    load_texture1(texture, info.width, info.height, 1.0f, tex_val < 0, tex.image.data() + i, tex.component);
+                }
+                std::cout << " -> " << name << std::endl;
+
+            }
+        }
 
 
+        model.images.push_back(std::move(tex));
+        cache[hconv] = model.images.size() - 1;
+        return model.images.size() - 1;;
     }
 
-    static bool gltfcvt_textures(gltf::Model &model, const std::map<uint32_t, Texture> &textures, const std::vector<H2GTextureConv> &texture_map, bool strict)
+    static bool gltfcvt_textures(gltf::Model &model, const fs::path &scene_root, const std::map<uint32_t, Texture> &textures, const std::vector<H2GTextureConv> &texture_map, bool strict)
     {
         TextureConvCacheMap texture_conv_cache;
         TextureSamplerCacheMap texture_samplers_cache;
@@ -568,17 +640,17 @@ namespace LiteScene {
             const H2GTextureConv &conv = texture_map[i];
 
             if(conv.textures.size() > 1) {
-                bool different_samplers = conv.textures[0]->sampler != conv.textures[1]->sampler;
-                different_samplers = different_samplers || (conv.textures.size() == 3 && conv.textures[0]->sampler != conv.textures[2]->sampler);
+                bool different_samplers = !(conv.textures[0]->sampler == conv.textures[1]->sampler);
+                different_samplers = different_samplers || (conv.textures.size() == 3 && !(conv.textures[0]->sampler == conv.textures[2]->sampler));
                 if(different_samplers) {
                     std::cerr << (strict ? "[scene_export ERROR]" : "[scene_export WARNING]");
-                    std::cerr << "Different samplers for merged textures" << std::endl;
+                    std::cerr << " Different samplers for merged textures" << std::endl;
                     if(strict) return false;
                 } 
             }
 
 
-            const int image = get_or_convert_image(model, textures, conv, texture_conv_cache);
+            const int image = get_or_convert_image(model, scene_root, textures, conv, texture_conv_cache);
             const int sampler = get_or_convert_sampler(model, conv.textures[0]->sampler, texture_samplers_cache);
 
             gltf::Texture tex{.sampler = sampler, .source = image};
@@ -594,15 +666,19 @@ namespace LiteScene {
         std::vector<H2GTextureConv> texture_map;
         std::vector<int> cam_nodes;
 
+        fs::path scene_root = fs::path(filename).parent_path();
+
         if(!only_geometry && !gltfcvt_materials(model, scene.materials, texture_map, strict)) return false;
         if(!gltfcvt_meshes(model, scene.geometries, scene.metadata, only_geometry)) return false;
+        if(!gltfcvt_textures(model, scene_root, scene.textures, texture_map, strict)) return false;
         if(!gltfcvt_cameras(model, scene.cameras, cam_nodes)) return false;
         if(!gltfcvt_scenes_insts(model, scene.scenes, cam_nodes, strict)) return false;
 
+
         gltf::TinyGLTF loader;
         loader.WriteGltfSceneToFile(&model, filename,
-                           true, // embedImages
-                           true, // embedBuffers
+                           false, // embedImages
+                           false, // embedBuffers
                            true || DEBUG_ENABLED, // pretty print
                            false); // write binary
 

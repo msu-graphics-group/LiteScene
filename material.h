@@ -12,10 +12,10 @@ namespace LiteScene {
     {
         std::size_t operator()(const TextureInstance::SamplerData &s) const 
         {
-            std::size_t res = std::hash<uint32_t>{}(static_cast<uint32_t>(s.first.addr_mode_u)) * 31ull
-                            + std::hash<uint32_t>{}(static_cast<uint32_t>(s.first.addr_mode_v)) * 31ull
-                            + std::hash<uint32_t>{}(static_cast<uint32_t>(s.first.addr_mode_w)) * 31ull
-                            + std::hash<uint32_t>{}(static_cast<uint32_t>(s.first.filter));
+            std::size_t res = std::hash<uint32_t>{}(static_cast<uint32_t>(s.addr_mode_u)) * 31ull
+                            + std::hash<uint32_t>{}(static_cast<uint32_t>(s.addr_mode_v)) * 31ull
+                            + std::hash<uint32_t>{}(static_cast<uint32_t>(s.addr_mode_w)) * 31ull
+                            + std::hash<uint32_t>{}(static_cast<uint32_t>(s.filter));
 
             return res;
         }

@@ -51,7 +51,7 @@ namespace LiteScene
         uint32_t id = INVALID_ID;
         std::string name;
 
-        std::shared_ptr<LiteImage::ICombinedImageSampler> get_combined_sampler(const TextureInstance &inst);
+        std::shared_ptr<LiteImage::ICombinedImageSampler> get_combined_sampler(const TextureInstance &inst) const;
 
         const Info &get_info() const { return info; }
         void set_info(const Info &i) { tex_cache.clear(); info = i; }
@@ -60,12 +60,12 @@ namespace LiteScene
         bool save_info(pugi::xml_node &node, const std::string &old_scene_root, const SceneMetadata &newmeta) const;
     private:
         Info info;
-        std::shared_ptr<LiteImage::ICombinedImageSampler> sampler;
-        std::unordered_map<
+        mutable std::shared_ptr<LiteImage::ICombinedImageSampler> sampler;
+        mutable std::unordered_map<
                             std::pair<TextureInstance::SamplerData, bool>,
                             std::shared_ptr<LiteImage::ICombinedImageSampler>,
-                            TexSamplerHash
-                          > tex_cache;
+                            TexSamplerBoolHash
+                         > tex_cache;
     };
 
     class Geometry

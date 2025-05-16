@@ -34,7 +34,7 @@ namespace LiteScene {
         std::vector<int> remap; 
         std::vector<const TextureInstance *> textures;
 
-        static constexpr int REMAP_ONES = 4;
+        static constexpr int REMAP_ONES = 5;
         static constexpr int REMAP_ZEROS = 0;
 
         H2GTextureConv() = default;
