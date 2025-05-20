@@ -33,7 +33,7 @@ namespace LiteScene
             }
         };
 
-        uint32_t id;
+        uint32_t id = INVALID_ID;
 
         SamplerData sampler;
         LiteMath::float4x4 matrix;

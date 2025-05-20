@@ -10,6 +10,7 @@ set(LITESCENE_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/scene_tex.cpp
     ${CMAKE_CURRENT_LIST_DIR}/scene_import.cpp
     ${CMAKE_CURRENT_LIST_DIR}/scene_export.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/textures_util.cpp
 )
 
 set(LITESCENE_VK_SOURCES

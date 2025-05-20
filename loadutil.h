@@ -32,7 +32,8 @@ namespace LiteScene {
          * negative value inverts channel c with (1 - c)
          */
         std::vector<int> remap; 
-        std::vector<const TextureInstance *> textures;
+        std::vector<TextureInstance> textures;
+        bool srgb;
 
         static constexpr int REMAP_ONES = 5;
         static constexpr int REMAP_ZEROS = 0;
@@ -40,7 +41,7 @@ namespace LiteScene {
         H2GTextureConv() = default;
         H2GTextureConv(const H2GTextureConv &) = default;
         H2GTextureConv(H2GTextureConv &&) = default;
-        H2GTextureConv(const decltype(remap) &r, const decltype(textures) &t) : remap(r), textures(t) {}
+        H2GTextureConv(const std::vector<int> &r, const std::vector<TextureInstance> &t, bool s = false) : remap(r), textures(t), srgb(s) {}
     };
 
     inline pugi::xml_node set_child(pugi::xml_node node, const pugi::char_t *name)
