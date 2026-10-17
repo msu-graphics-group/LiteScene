@@ -119,6 +119,8 @@ struct SceneManager
 
   VkAccelerationStructureKHR GetTLAS() const { return m_pBuilderV2->GetTLAS(); }
   void BuildAllBLAS();
+
+  void ClearTLAS();
   void BuildTLAS(const uint32_t* a_sbtRecordOffset = nullptr, size_t a_recordNum = 0);
   void BuildTLAS_MotionBlur(const uint32_t* a_sbtRecordOffset = nullptr, size_t a_recordNum = 0);
 
@@ -127,6 +129,8 @@ struct SceneManager
 private:
   const std::string missingTextureImgPath = "../resources/data/missing_texture.png";
   LoaderConfig m_config;
+
+  bool m_blasIsDone = false;
 
   vk_utils::VulkanImageMem LoadSpecialTexture();
   void InitGeoBuffersGPU(uint32_t a_meshNum, uint32_t a_totalVertNum, uint32_t a_totalIndicesNum, uint32_t maxPrimitivesPerMesh);
@@ -151,7 +155,7 @@ private:
 
   std::vector<InstanceInfo> m_instanceInfos = {};
   std::vector<LiteMath::float4x4> m_instanceMatrices = {};
-  std::unordered_map<uint32_t, float4x4> m_motionMatrices = {};
+  std::unordered_map<uint32_t, LiteMath::float4x4> m_motionMatrices = {};
 
   std::vector<hydra_xml::Camera> m_sceneCameras = {};
 
@@ -168,6 +172,11 @@ private:
   VkBuffer m_instMatricesBuf    = VK_NULL_HANDLE;
   VkDeviceMemory m_instMemAlloc = VK_NULL_HANDLE;
 
+  VkBuffer       m_instancesBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory m_instancesAlloc  = VK_NULL_HANDLE;
+  size_t         m_instancesSize   = 0;
+  uint64_t       m_instancesDevAddr= 0;
+
   VkDeviceSize m_loadedVertices = 0;
   VkDeviceSize m_loadedIndices  = 0;
 
@@ -177,23 +186,20 @@ private:
   VkDeviceMemory m_matMemAlloc = VK_NULL_HANDLE;
   std::vector<vk_utils::VulkanImageMem> m_textures;
   std::unordered_map<uint32_t, vk_utils::VulkanImageMem&> m_texturesById;
-  VkDeviceMemory m_texturesMemAlloc = VK_NULL_HANDLE;
-  std::vector<VkSampler> m_samplers;
+  
+  VkDeviceMemory           m_texturesMemAlloc = VK_NULL_HANDLE;
+  std::vector<VkSampler>   m_samplers;
   std::vector<VkImageView> m_textureViews;
 
-  VkDevice m_device = VK_NULL_HANDLE;
-  VkPhysicalDevice m_physDevice = VK_NULL_HANDLE;
-  VkCommandPool m_pool = VK_NULL_HANDLE;
+  VkDevice         m_device      = VK_NULL_HANDLE;
+  VkPhysicalDevice m_physDevice  = VK_NULL_HANDLE;
+  VkCommandPool    m_pool        = VK_NULL_HANDLE;
+  uint32_t         m_graphicsQId = UINT32_MAX;
+  VkQueue          m_graphicsQ   = VK_NULL_HANDLE;
 
-  uint32_t m_graphicsQId = UINT32_MAX;
-  VkQueue  m_graphicsQ   = VK_NULL_HANDLE;
-  std::shared_ptr<vk_utils::ICopyEngine> m_pCopyHelper;
-
-  std::unique_ptr<vk_rt_utils::AccelStructureBuilder> m_pBuilder;
-
+  std::shared_ptr<vk_utils::ICopyEngine>                m_pCopyHelper;
   std::unique_ptr<vk_rt_utils::AccelStructureBuilderV2> m_pBuilderV2;
-
-  std::vector<vk_rt_utils::BLASBuildInput> m_blasData;
+  std::vector<vk_rt_utils::BLASBuildInput>              m_blasData;
 
   bool m_useRTX = false;
 };

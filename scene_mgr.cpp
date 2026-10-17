@@ -165,6 +165,7 @@ uint32_t SceneManager::AddMeshFromDataAndQueueBuildAS(cmesh::SimpleMesh &meshDat
     indexBufferDeviceAddress.deviceAddress  = vk_rt_utils::getBufferDeviceAddress(m_device, m_geoIdxBuf);
 
     m_meshInfos[idx].blasId = m_pBuilderV2->AddBLAS(m_meshInfos[idx], m_pMeshData->SingleVertexSize(), vertexBufferDeviceAddress, indexBufferDeviceAddress);
+    m_blasIsDone = false;
   }
 
   return idx;
@@ -376,6 +377,12 @@ SceneManager::~SceneManager()
 
 void SceneManager::DestroyScene()
 {
+  if (m_instancesAlloc != VK_NULL_HANDLE && m_instancesBuffer != VK_NULL_HANDLE)
+  {
+    vkDestroyBuffer(m_device, m_instancesBuffer, nullptr); m_instancesBuffer = VK_NULL_HANDLE;
+    vkFreeMemory   (m_device, m_instancesAlloc,  nullptr); m_instancesAlloc  = VK_NULL_HANDLE;
+  }
+
   if(m_geoVertBuf != VK_NULL_HANDLE)
   {
     vkDestroyBuffer(m_device, m_geoVertBuf, nullptr);
@@ -481,12 +488,22 @@ void SceneManager::DestroyScene()
   m_samplers.clear();
   m_texturesById.clear();
   m_sceneCameras.clear();
+
+  m_blasIsDone = false;
 }
 
 void SceneManager::BuildAllBLAS()
 {
-//  m_pBuilder->BuildBLAS(m_blasData);
-  m_pBuilderV2->BuildAllBLAS();
+  if(!m_blasIsDone)
+  {
+    m_pBuilderV2->BuildAllBLAS();
+    m_blasIsDone = true;
+  }
+}
+
+void SceneManager::ClearTLAS()
+{
+  m_instanceInfos.resize(0);
 }
 
 void SceneManager::BuildTLAS(const uint32_t* a_sbtRecordOffset, size_t a_recordNum)
@@ -522,42 +539,43 @@ void SceneManager::BuildTLAS(const uint32_t* a_sbtRecordOffset, size_t a_recordN
 
     geometryInstances.push_back(instance);
   }
+  
+  const size_t instBufferSize = sizeof(VkAccelerationStructureInstanceKHR) * geometryInstances.size();
 
-  VkBuffer instancesBuffer = VK_NULL_HANDLE;
+  if (m_instancesAlloc != VK_NULL_HANDLE && m_instancesBuffer != VK_NULL_HANDLE && m_instancesSize < instBufferSize)
+  {
+    vkDestroyBuffer(m_device, m_instancesBuffer, nullptr); m_instancesBuffer = VK_NULL_HANDLE;
+    vkFreeMemory   (m_device, m_instancesAlloc,  nullptr); m_instancesAlloc  = VK_NULL_HANDLE;
+  }
 
-  VkMemoryRequirements memReqs {};
-  instancesBuffer = vk_utils::createBuffer(m_device, sizeof(VkAccelerationStructureInstanceKHR) * geometryInstances.size(),
-    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-    &memReqs);
+  if(m_instancesBuffer == VK_NULL_HANDLE)
+  {
+    VkMemoryRequirements memReqs {};
+    m_instancesBuffer = vk_utils::createBuffer(m_device, instBufferSize,
+      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+      &memReqs);
 
-  VkMemoryAllocateFlagsInfo memoryAllocateFlagsInfo{};
-  memoryAllocateFlagsInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
-  memoryAllocateFlagsInfo.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT_KHR;
+    VkMemoryAllocateFlagsInfo memoryAllocateFlagsInfo{};
+    memoryAllocateFlagsInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+    memoryAllocateFlagsInfo.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT_KHR;
 
-  VkDeviceMemory instancesAlloc;
-  VkMemoryAllocateInfo allocateInfo = {};
-  allocateInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-  allocateInfo.pNext           = &memoryAllocateFlagsInfo;
-  allocateInfo.allocationSize  = memReqs.size;
-  allocateInfo.memoryTypeIndex = vk_utils::findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_physDevice);
-  VK_CHECK_RESULT(vkAllocateMemory(m_device, &allocateInfo, nullptr, &instancesAlloc));
+    VkMemoryAllocateInfo allocateInfo = {};
+    allocateInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocateInfo.pNext           = &memoryAllocateFlagsInfo;
+    allocateInfo.allocationSize  = memReqs.size;
+    allocateInfo.memoryTypeIndex = vk_utils::findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_physDevice);
+    VK_CHECK_RESULT(vkAllocateMemory  (m_device, &allocateInfo, nullptr, &m_instancesAlloc));
+    VK_CHECK_RESULT(vkBindBufferMemory(m_device, m_instancesBuffer, m_instancesAlloc, 0));
 
-  VK_CHECK_RESULT(vkBindBufferMemory(m_device, instancesBuffer, instancesAlloc, 0));
-  m_pCopyHelper->UpdateBuffer(instancesBuffer, 0, geometryInstances.data(),
-    sizeof(VkAccelerationStructureInstanceKHR) * geometryInstances.size());
+    m_instancesSize    = instBufferSize;
+    m_instancesDevAddr = vk_rt_utils::getBufferDeviceAddress(m_device, m_instancesBuffer);
+  }
+
+  m_pCopyHelper->UpdateBuffer(m_instancesBuffer, 0, geometryInstances.data(), instBufferSize);
 
   VkDeviceOrHostAddressConstKHR instBufferDeviceAddress{};
-  instBufferDeviceAddress.deviceAddress = vk_rt_utils::getBufferDeviceAddress(m_device, instancesBuffer);
+  instBufferDeviceAddress.deviceAddress = m_instancesDevAddr;
   m_pBuilderV2->BuildTLAS(static_cast<uint32_t>(geometryInstances.size()), instBufferDeviceAddress);
-
-  if (instancesAlloc != VK_NULL_HANDLE)
-  {
-    vkFreeMemory(m_device, instancesAlloc, nullptr);
-  }
-  if (instancesBuffer != VK_NULL_HANDLE)
-  {
-    vkDestroyBuffer(m_device, instancesBuffer, nullptr);
-  }
 }
 
 void SceneManager::BuildTLAS_MotionBlur(const uint32_t* a_sbtRecordOffset, size_t a_recordNum)
