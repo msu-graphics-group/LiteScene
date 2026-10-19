@@ -173,6 +173,7 @@ uint32_t SceneManager::AddMeshFromDataAndQueueBuildAS(cmesh::SimpleMesh &meshDat
 
 uint32_t SceneManager::AddGeomFromAABBAndQueueBuildAS(uint32_t a_typeId, const VkAabbPositionsKHR* boxes6f, size_t a_boxNumber)
 {
+  ReserveGeoBuffersGPU(m_meshInfos.size(), m_loadedVertices, m_loadedIndices, m_aabbsTotal + a_boxNumber);
   AABBBatchInfo currBatch{m_aabbsTotal, a_boxNumber, 0, a_typeId};
   m_pCopyHelper->UpdateBuffer(m_aabbBuf, currBatch.start*sizeof(VkAabbPositionsKHR), boxes6f, currBatch.size*sizeof(VkAabbPositionsKHR));
   m_aabbsTotal += a_boxNumber;
@@ -259,7 +260,7 @@ void SceneManager::InitGeoBuffersGPU(uint32_t a_meshNum, uint32_t a_totalVertNum
   const VkDeviceSize indexBufSize   = m_pMeshData->SingleIndexSize() * a_totalIndicesNum;
   const VkDeviceSize aabbBufferSize = maxPrimitivesPerMesh*sizeof(VkAabbPositionsKHR);  
 
-  VkBufferUsageFlags flags = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  VkBufferUsageFlags flags = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT; // SRC: content is copied when buffers grow
   if(m_useRTX)
   {
     flags |= VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
@@ -295,10 +296,75 @@ void SceneManager::InitGeoBuffersGPU(uint32_t a_meshNum, uint32_t a_totalVertNum
   }
 
   m_geoMemAlloc = vk_utils::allocateAndBindWithPadding(m_device, m_physDevice, all_buffers, allocFlags);
+
+  m_geoMeshCapacity    = a_meshNum;
+  m_geoVertCapacity    = a_totalVertNum;
+  m_geoIndicesCapacity = a_totalIndicesNum;
+  m_geoAABBCapacity    = maxPrimitivesPerMesh;
+}
+
+void SceneManager::ReserveGeoBuffersGPU(size_t a_meshNum, size_t a_vertNum, size_t a_indicesNum, size_t a_aabbNum)
+{
+  if(m_geoMemAlloc == VK_NULL_HANDLE) // buffers are not created yet
+    return;
+  if(a_meshNum <= m_geoMeshCapacity && a_vertNum <= m_geoVertCapacity && a_indicesNum <= m_geoIndicesCapacity && a_aabbNum <= m_geoAABBCapacity)
+    return;
+
+  // queued BLAS refer to device addresses of current buffers, build them before the buffers are destroyed
+  //
+  if(m_config.build_acc_structs && m_pBuilderV2 != nullptr)
+    BuildAllBLAS();
+
+  VkBuffer       oldVert   = m_geoVertBuf;
+  VkBuffer       oldIdx    = m_geoIdxBuf;
+  VkBuffer       oldAABB   = m_aabbBuf;
+  VkBuffer       oldInfo   = m_meshInfoBuf;
+  VkBuffer       oldMatIds = m_matIdsBuf;
+  VkDeviceMemory oldMem    = m_geoMemAlloc;
+
+  const size_t oldMeshCap = m_geoMeshCapacity;
+  auto Grow = [](size_t a_need, size_t a_cap) { return (a_need <= a_cap) ? a_cap : std::max(a_need, 2*a_cap); };
+  InitGeoBuffersGPU(uint32_t(Grow(a_meshNum, m_geoMeshCapacity)), uint32_t(Grow(a_vertNum, m_geoVertCapacity)),
+                    uint32_t(Grow(a_indicesNum, m_geoIndicesCapacity)), uint32_t(Grow(a_aabbNum, m_geoAABBCapacity)));
+
+  // copy what is already loaded to GPU
+  //
+  const VkDeviceSize vertBytes   = m_loadedVertices * m_pMeshData->SingleVertexSize();
+  const VkDeviceSize idxBytes    = m_loadedIndices  * m_pMeshData->SingleIndexSize();
+  const VkDeviceSize aabbBytes   = m_aabbsTotal * sizeof(VkAabbPositionsKHR);
+  const VkDeviceSize infoBytes   = oldMeshCap * sizeof(uint32_t) * 2;
+  const VkDeviceSize matIdsBytes = (m_loadedIndices / 3) * sizeof(uint32_t);
+
+  VkCommandBuffer cmdBuff = vk_utils::createCommandBuffer(m_device, m_pool);
+  VkCommandBufferBeginInfo beginInfo = {};
+  beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  vkBeginCommandBuffer(cmdBuff, &beginInfo);
+  auto Copy = [&](VkBuffer a_src, VkBuffer a_dst, VkDeviceSize a_size)
+  {
+    if(a_size == 0)
+      return;
+    VkBufferCopy region = {0, 0, a_size};
+    vkCmdCopyBuffer(cmdBuff, a_src, a_dst, 1, &region);
+  };
+  Copy(oldVert,   m_geoVertBuf,  vertBytes);
+  Copy(oldIdx,    m_geoIdxBuf,   idxBytes);
+  Copy(oldAABB,   m_aabbBuf,     aabbBytes);
+  Copy(oldInfo,   m_meshInfoBuf, infoBytes);
+  Copy(oldMatIds, m_matIdsBuf,   matIdsBytes);
+  vkEndCommandBuffer(cmdBuff);
+  vk_utils::executeCommandBufferNow(cmdBuff, m_graphicsQ, m_device);
+  vkFreeCommandBuffers(m_device, m_pool, 1, &cmdBuff);
+
+  for(VkBuffer buf : {oldVert, oldIdx, oldAABB, oldInfo, oldMatIds})
+    vkDestroyBuffer(m_device, buf, nullptr);
+  vkFreeMemory(m_device, oldMem, nullptr);
 }
 
 void SceneManager::LoadOneMeshOnGPU(uint32_t meshIdx)
 {
+  ReserveGeoBuffersGPU(size_t(meshIdx) + 1, m_loadedVertices + m_meshInfos[meshIdx].m_vertNum, m_loadedIndices + m_meshInfos[meshIdx].m_indNum, m_aabbsTotal);
+
   VkDeviceSize vertexBufSize = m_meshInfos[meshIdx].m_vertNum * m_pMeshData->SingleVertexSize();
   VkDeviceSize indexBufSize  = m_meshInfos[meshIdx].m_indNum  * m_pMeshData->SingleIndexSize();
 

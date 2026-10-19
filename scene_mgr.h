@@ -134,6 +134,7 @@ private:
 
   vk_utils::VulkanImageMem LoadSpecialTexture();
   void InitGeoBuffersGPU(uint32_t a_meshNum, uint32_t a_totalVertNum, uint32_t a_totalIndicesNum, uint32_t maxPrimitivesPerMesh);
+  void ReserveGeoBuffersGPU(size_t a_meshNum, size_t a_vertNum, size_t a_indicesNum, size_t a_aabbNum); ///< re-allocate geometry buffers (keeping their content) if they are too small
   void LoadOneMeshOnGPU(uint32_t meshIdx);
   void LoadCommonGeoDataOnGPU();
   void LoadInstanceDataOnGPU();
@@ -168,6 +169,10 @@ private:
   VkBuffer m_matIdsBuf         = VK_NULL_HANDLE;
   VkBuffer m_aabbBuf           = VK_NULL_HANDLE;
   VkDeviceMemory m_geoMemAlloc = VK_NULL_HANDLE;
+  size_t m_geoMeshCapacity    = 0; ///< capacity of geometry buffers: meshes, vertices, indices and boxes; 'InitEmptyScene' limits are only initial reserves
+  size_t m_geoVertCapacity    = 0;
+  size_t m_geoIndicesCapacity = 0;
+  size_t m_geoAABBCapacity    = 0;
 
   VkBuffer m_instMatricesBuf    = VK_NULL_HANDLE;
   VkDeviceMemory m_instMemAlloc = VK_NULL_HANDLE;
